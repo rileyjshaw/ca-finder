@@ -1,6 +1,6 @@
 /* Here’s how this program works:
 
-It’s based on my prior CA Finder (https://glitch.com/edit/#!/fs-ca-finder?path=script.js),
+It’s based on my prior CA Finder (https://rileyjshaw.com/glitch-archive/projects/fs-ca-finder/),
 and its variants. But this time it uses the GPU.
 
 It is a cellular automaton simulation with the following rules:
