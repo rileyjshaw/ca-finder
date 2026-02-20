@@ -41,9 +41,9 @@ import {
 const MAX_WEIGHT = 1.5;
 const MIN_N_STATES = 2;
 const MAX_N_STATES = 32;
-const MAX_NEIGHBOR_RANGE = 11;
+const MAX_NEIGHBOR_RANGE = 12;
 const MIN_N_RINGS = 1;
-const MAX_N_RINGS = 4;
+const MAX_N_RINGS = 8;
 
 // Derived.
 const MAX_CELLS_PER_RING = Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2);
