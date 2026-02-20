@@ -59,9 +59,9 @@ tinykeys(window, {
 				history.replaceState(null, '', location.pathname + location.search + hash);
 			}
 			const safeName = encoded.length <= 64 ? encoded : encoded.slice(0, 64);
-			displayShader.save(`ca-finder-${safeName}.png`);
+			displayShader.save(`ca-${safeName}.png`);
 		} else {
-			displayShader.save('ca-finder-export.png');
+			displayShader.save('ca-export.png');
 		}
 	},
 	KeyS: () => scramble(),
