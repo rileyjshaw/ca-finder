@@ -812,6 +812,101 @@ window.addEventListener('hashchange', () => {
 	}
 });
 
+const imageSeedFsSource = `#version 300 es
+precision mediump float;
+
+uniform sampler2D u_image;
+uniform vec3 u_paletteColors[${MAX_N_STATES}];
+uniform int u_nStates;
+
+in vec2 v_uv;
+out uint outColor;
+
+void main() {
+	vec3 pixel = texture(u_image, v_uv).rgb;
+	float bestDist = 1e10;
+	uint bestState = 0u;
+	for (int i = 0; i < ${MAX_N_STATES}; i++) {
+		if (i >= u_nStates) break;
+		vec3 diff = pixel - u_paletteColors[i];
+		float d = dot(diff, diff);
+		if (d < bestDist) {
+			bestDist = d;
+			bestState = uint(i);
+		}
+	}
+	outColor = bestState;
+}
+`;
+
+let imageSeedShader = null;
+
+function getOrCreateImageSeedShader() {
+	if (imageSeedShader) {
+		imageSeedShader.destroy();
+		imageSeedShader = null;
+	}
+	imageSeedShader = new ShaderPad(imageSeedFsSource, {
+		canvas,
+		...R8UI_OPTIONS,
+	});
+	imageSeedShader.initializeTexture('u_image', { data: new Uint8Array(4), width: 1, height: 1 }, {
+		internalFormat: 'RGBA8',
+		format: 'RGBA',
+		type: 'UNSIGNED_BYTE',
+		minFilter: 'NEAREST',
+		magFilter: 'NEAREST',
+	});
+	imageSeedShader.initializeUniform('u_paletteColors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
+	imageSeedShader.initializeUniform('u_nStates', 'int', nStates);
+	return imageSeedShader;
+}
+
+function handleImageDrop(file) {
+	const filename = file.name.replace(/\.[^.]+$/, '');
+	if (!filename.startsWith('ca-')) return;
+
+	const encoded = filename.slice(3);
+	if (!encoded) return;
+
+	if (!restoreStateFromUrl(encoded)) {
+		showError();
+		return;
+	}
+
+	const img = new Image();
+	const objectUrl = URL.createObjectURL(file);
+	img.onload = () => {
+		URL.revokeObjectURL(objectUrl);
+
+		const shader = getOrCreateImageSeedShader();
+		shader.updateUniforms({ u_nStates: nStates });
+		shader.updateUniforms({ u_paletteColors: getColorsForUniform() });
+		shader.updateTextures({ u_image: img });
+		shader.draw();
+
+		updateShader.reset();
+		updateShader.updateTextures({ u_seed: shader });
+		if (displayShader) displayShader.updateTextures({ u_stateTexture: updateShader });
+		needsDisplayUpdate = true;
+
+		showInfo('Loaded from image');
+	};
+	img.src = objectUrl;
+}
+
+window.addEventListener('dragover', e => {
+	e.preventDefault();
+});
+
+window.addEventListener('drop', e => {
+	e.preventDefault();
+	const file = e.dataTransfer?.files?.[0];
+	if (file && file.type.startsWith('image/')) {
+		handleImageDrop(file);
+	}
+});
+
 function render() {
 	if (!isPaused && updateShader) {
 		updateShader.step();
