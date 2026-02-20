@@ -35,7 +35,8 @@ import './style.css';
 
 // Configurable.
 const MAX_WEIGHT = 1.5;
-const MAX_N_STATES = 128;
+const MIN_N_STATES = 2;
+const MAX_N_STATES = 32;
 const MAX_NEIGHBOR_RANGE = 11;
 const MIN_STACKED_UPDATES = 1;
 const MAX_STACKED_UPDATES = 8;
@@ -70,6 +71,20 @@ tinykeys(window, {
 		updateUniforms();
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
+	KeyM: () => {
+		nStates = Math.min(MAX_N_STATES, nStates + 1);
+		rulesetHistory.length = 0;
+		updateUniforms();
+		scramble();
+		showInfo(`States: ${nStates}`);
+	},
+	'Shift+KeyM': () => {
+		nStates = Math.max(MIN_N_STATES, nStates - 1);
+		rulesetHistory.length = 0;
+		updateUniforms();
+		scramble();
+		showInfo(`States: ${nStates}`);
+	},
 	KeyN: () => {
 		setNeighborRange(Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1));
 		showInfo(`Neighbor range: ${neighborRange}`);
@@ -79,16 +94,20 @@ tinykeys(window, {
 		showInfo(`Neighbor range: ${neighborRange}`);
 	},
 	KeyR: () => {
+		pushRulesetToHistory();
 		updateUniforms();
+	},
+	'Shift+KeyR': () => {
+		restorePriorRuleset();
 	},
 	KeyS: () => scramble(),
 	KeyT: () => {
-		stackedUpdateCount = Math.min(MAX_STACKED_UPDATES, stackedUpdateCount + 1);
-		showInfo(`Stacked updates: ${stackedUpdateCount}`);
+		nStackedUpdates = Math.min(MAX_STACKED_UPDATES, nStackedUpdates + 1);
+		showInfo(`Stacked updates: ${nStackedUpdates}`);
 	},
 	'Shift+KeyT': () => {
-		stackedUpdateCount = Math.max(MIN_STACKED_UPDATES, stackedUpdateCount - 1);
-		showInfo(`Stacked updates: ${stackedUpdateCount}`);
+		nStackedUpdates = Math.max(MIN_STACKED_UPDATES, nStackedUpdates - 1);
+		showInfo(`Stacked updates: ${nStackedUpdates}`);
 	},
 	KeyV: () => {
 		isVonNeumann = !isVonNeumann;
@@ -143,7 +162,7 @@ let cellInertia = 0.8;
 let isVonNeumann = false;
 let neighborRange;
 let minNeighborWeight;
-let stackedUpdateCount = 1;
+let nStackedUpdates = 1;
 let resolutionMultiplier = 0.25;
 let isPaused = false;
 
@@ -152,6 +171,8 @@ const rules = new Uint8Array(MAX_N_RULES);
 let colors = new Float32Array(MAX_N_STATES * 3);
 let nextPaletteIdx = 0;
 let nextWeightsIdx = 0;
+
+const rulesetHistory = [];
 
 function getRandomTextureData(width, height) {
 	const size = width * height;
@@ -258,6 +279,33 @@ function getColorsForUniform() {
 	return Array.from({ length: MAX_N_STATES }, (_, i) => [colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]]);
 }
 
+const MAX_RULESET_HISTORY = 32;
+function pushRulesetToHistory() {
+	const nNeighbors = Math.pow(neighborRange * 2 + 1, 2) - 1;
+	const maxWeight = Array.from(weights.slice(0, nStates)).reduce((a, w) => Math.max(a, w), -Infinity);
+	const maxNeighborWeight = Math.floor(maxWeight * nNeighbors);
+	const nRules = maxNeighborWeight - minNeighborWeight + 1;
+	if (nRules < 1) return;
+	rulesetHistory.push({
+		rules: new Uint8Array(rules.subarray(0, nRules)),
+		minNeighborWeight,
+	});
+	if (rulesetHistory.length > MAX_RULESET_HISTORY) rulesetHistory.shift();
+}
+
+function restorePriorRuleset() {
+	const entry = rulesetHistory.pop();
+	if (!entry) return;
+	rules.set(entry.rules, 0);
+	minNeighborWeight = entry.minNeighborWeight;
+	if (updateShader) {
+		updateShader.updateUniforms({
+			u_rules: Array.from(rules),
+			u_minNeighborWeight: minNeighborWeight,
+		});
+	}
+}
+
 function updateUniforms() {
 	const nNeighbors = Math.pow(neighborRange * 2 + 1, 2) - 1;
 	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
@@ -295,6 +343,7 @@ function updateUniforms() {
 
 function setNeighborRange(newNeighborRange) {
 	neighborRange = newNeighborRange;
+	rulesetHistory.length = 0;
 	updateUniforms();
 }
 
@@ -322,6 +371,7 @@ function updateWeights(direction = 1) {
 			returnLabel = 'random';
 			break;
 	}
+	rulesetHistory.length = 0;
 	updateUniforms();
 	return returnLabel;
 }
@@ -400,7 +450,7 @@ function render() {
 	setCanvasSize();
 
 	if (!isPaused && updateShader) {
-		for (let i = 0; i < stackedUpdateCount; i++) {
+		for (let i = 0; i < nStackedUpdates; i++) {
 			updateShader.updateUniforms({ u_canvasOffset: STACKED_OFFSETS[i] });
 			updateShader.step();
 		}
