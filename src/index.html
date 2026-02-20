@@ -4,6 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>CA Finder: GPU Edition</title>
+		<link rel="stylesheet" href="style.css" />
 	</head>
 	<body>
 		<canvas id="canvas"></canvas>
@@ -35,20 +36,25 @@
 					automata, you might want to check that out instead.
 				</p>
 				<h2>Controls</h2>
+				<h3>Ruleset controls</h3>
 				<ul>
-					<li><kbd>B</kbd>: Save image</li>
-					<li><kbd>C</kbd>: Increment color palette (decrement with <kbd>Shift</kbd> + <kbd>C</kbd>)</li>
-					<li><kbd>D</kbd>: Increase pixel density (decrease with <kbd>Shift</kbd> + <kbd>D</kbd>)</li>
-					<li><kbd>I</kbd>: Increase cell inertia (decrease with <kbd>Shift</kbd> + <kbd>I</kbd>)</li>
-					<li><kbd>M</kbd>: Increase number of states (decrease with <kbd>Shift</kbd> + <kbd>M</kbd>)</li>
-					<li><kbd>N</kbd>: Increase neighbor range (decrease with <kbd>Shift</kbd> + <kbd>N</kbd>)</li>
-					<li><kbd>R</kbd>: Change rules (completely randomized); <kbd>Shift</kbd> + <kbd>R</kbd>: Restore prior ruleset</li>
-					<li><kbd>S</kbd>: Scramble pixels (useful if a simulation gets stuck in a single state)</li>
-					<li>
-						<kbd>T</kbd>: Add neighborhood ring (remove with <kbd>Shift</kbd> + <kbd>T</kbd>)
-					</li>
-					<li><kbd>V</kbd>: Change neighborhood type</li>
+					<li><kbd>→</kbd>: New random ruleset</li>
+					<li><kbd>↑</kbd>: Mutate ruleset (swap)</li>
+					<li><kbd>↓</kbd>: Mutate ruleset (point)</li>
+					<li><kbd>←</kbd>: Undo last ruleset change</li>
+				</ul>
+				<h3>Other controls</h3>
+				<ul>
+					<li><kbd>Q</kbd>: Increase neighbor range (decrease with <kbd>Shift</kbd> + <kbd>Q</kbd>)</li>
 					<li><kbd>W</kbd>: Change weight distribution</li>
+					<li><kbd>E</kbd>: Increase cell inertia (decrease with <kbd>Shift</kbd> + <kbd>E</kbd>)</li>
+					<li><kbd>A</kbd>: Add neighborhood ring (remove with <kbd>Shift</kbd> + <kbd>A</kbd>)</li>
+					<li><kbd>S</kbd>: Scramble pixels (useful if a simulation gets stuck in a single state)</li>
+					<li><kbd>D</kbd>: Increase pixel density (decrease with <kbd>Shift</kbd> + <kbd>D</kbd>)</li>
+					<li><kbd>Z</kbd>: Increase number of states (decrease with <kbd>Shift</kbd> + <kbd>Z</kbd>)</li>
+					<li><kbd>X</kbd>: Change neighborhood type</li>
+					<li><kbd>C</kbd>: Increment color palette (decrement with <kbd>Shift</kbd> + <kbd>C</kbd>)</li>
+					<li><kbd>Enter</kbd>: Save image</li>
 					<li><kbd>Space</kbd>: Pause / play simulation</li>
 					<li><kbd>?</kbd>: Show this info pane</li>
 					<li><kbd>Esc</kbd>: Hide this info pane</li>

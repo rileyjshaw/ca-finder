@@ -28,10 +28,14 @@ import ShaderPad from 'shaderpad';
 import helpers from 'shaderpad/plugins/helpers';
 import save from 'shaderpad/plugins/save';
 
-import palettes from './palettes.js';
-import { generateFurthestSubsequentDistanceArray, hexToNormalizedRGB, shuffleArray } from './util.js';
-
-import './style.css';
+import rawPalettes, { paletteIds } from './palettes.js';
+import {
+	compressToUrl,
+	decompressFromUrl,
+	generateFurthestSubsequentDistanceArray,
+	hexToNormalizedRGB,
+	shuffleArray,
+} from './util.js';
 
 // Configurable.
 const MAX_WEIGHT = 1.5;
@@ -45,12 +49,22 @@ const MAX_N_RINGS = 4;
 const MAX_CELLS_PER_RING = Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2);
 const MAX_N_RULES = Math.floor(MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
 
+let needsDisplayUpdate = true;
 tinykeys(window, {
-	KeyB: () => {
-		if (displayShader?.save) displayShader.save('ca-finder-export.png');
+	Enter: () => {
+		const encoded = encodeStateToUrl();
+		if (encoded != null) {
+			const hash = '#' + encoded;
+			if (location.hash !== hash) {
+				history.replaceState(null, '', location.pathname + location.search + hash);
+			}
+			const safeName = encoded.length <= 64 ? encoded : encoded.slice(0, 64);
+			displayShader.save(`ca-finder-${safeName}.png`);
+		} else {
+			displayShader.save('ca-finder-export.png');
+		}
 	},
-	KeyC: () => updateColors(),
-	'Shift+KeyC': () => updateColors(-1),
+	KeyS: () => scramble(),
 	KeyD: () => {
 		const next = Math.min(2, resolutionMultiplier * 2);
 		if (next !== resolutionMultiplier) {
@@ -67,61 +81,56 @@ tinykeys(window, {
 		}
 		showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
 	},
-	KeyI: () => {
+	KeyC: () => updateColors(),
+	'Shift+KeyC': () => updateColors(-1),
+	KeyQ: () => {
+		const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
+		if (next !== neighborRange) setNeighborRange(next, true);
+		showInfo(`Neighbor range: ${neighborRange}`);
+	},
+	'Shift+KeyQ': () => {
+		const next = Math.max(neighborRange - 1, 1);
+		if (next !== neighborRange) setNeighborRange(next, true);
+		showInfo(`Neighbor range: ${neighborRange}`);
+	},
+	KeyE: () => {
 		const next = Math.min(1, cellInertia + 0.05);
 		if (next !== cellInertia) {
 			cellInertia = next;
-			updateUniforms();
 		}
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
-	'Shift+KeyI': () => {
+	'Shift+KeyE': () => {
 		const next = Math.max(0, cellInertia - 0.05);
 		if (next !== cellInertia) {
 			cellInertia = next;
-			updateUniforms();
 		}
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
-	KeyM: () => {
+	KeyZ: () => {
 		const next = Math.min(MAX_N_STATES, nStates + 1);
 		if (next !== nStates) {
 			nStates = next;
-			rulesetHistory.length = 0;
-			updateUniforms();
+			updateUniformsKeepRuleset();
 			scramble();
 		}
 		showInfo(`States: ${nStates}`);
 	},
-	'Shift+KeyM': () => {
+	'Shift+KeyZ': () => {
 		const next = Math.max(MIN_N_STATES, nStates - 1);
 		if (next !== nStates) {
 			nStates = next;
-			rulesetHistory.length = 0;
-			updateUniforms();
+			updateUniformsKeepRuleset();
 			scramble();
 		}
 		showInfo(`States: ${nStates}`);
 	},
-	KeyN: () => {
-		const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
-		if (next !== neighborRange) setNeighborRange(next);
-		showInfo(`Neighbor range: ${neighborRange}`);
+	KeyX: () => {
+		isVonNeumann = !isVonNeumann;
+		updateUniformsKeepRuleset();
+		showInfo(isVonNeumann ? 'Von Neumann neighborhood' : 'Moore neighborhood');
 	},
-	'Shift+KeyN': () => {
-		const next = Math.max(neighborRange - 1, 1);
-		if (next !== neighborRange) setNeighborRange(next);
-		showInfo(`Neighbor range: ${neighborRange}`);
-	},
-	KeyR: () => {
-		pushRulesetToHistory();
-		updateUniforms();
-	},
-	'Shift+KeyR': () => {
-		restorePriorRuleset();
-	},
-	KeyS: () => scramble(),
-	KeyT: () => {
+	KeyA: () => {
 		const next = Math.min(MAX_N_RINGS, nRings + 1);
 		if (next !== nRings) {
 			nRings = next;
@@ -129,26 +138,19 @@ tinykeys(window, {
 			if (neighborRange < minRange) {
 				neighborRange = Math.min(MAX_NEIGHBOR_RANGE, minRange);
 			}
-			rulesetHistory.length = 0;
-			updateUniforms();
+			updateUniformsKeepRuleset();
 			scramble();
 		}
 		showInfo(`Neighborhood rings: ${nRings}`);
 	},
-	'Shift+KeyT': () => {
+	'Shift+KeyA': () => {
 		const next = Math.max(MIN_N_RINGS, nRings - 1);
 		if (next !== nRings) {
 			nRings = next;
-			rulesetHistory.length = 0;
-			updateUniforms();
+			updateUniformsKeepRuleset();
 			scramble();
 		}
 		showInfo(`Neighborhood rings: ${nRings}`);
-	},
-	KeyV: () => {
-		isVonNeumann = !isVonNeumann;
-		updateUniforms();
-		showInfo(isVonNeumann ? 'Von Neumann neighborhood' : 'Moore neighborhood');
 	},
 	KeyW: () => {
 		showInfo(`Weights: ${updateWeights()}`);
@@ -156,8 +158,30 @@ tinykeys(window, {
 	'Shift+KeyW': () => {
 		showInfo(`Weights: ${updateWeights(-1)}`);
 	},
+	ArrowRight: e => {
+		e.preventDefault();
+		pushRulesetToHistory();
+		generateNewRuleset();
+		showInfo('New ruleset');
+	},
+	ArrowUp: e => {
+		e.preventDefault();
+		mutateRuleset('swap');
+		showInfo('Swap mutation');
+	},
+	ArrowDown: e => {
+		e.preventDefault();
+		mutateRuleset('point');
+		showInfo('Point mutation');
+	},
+	ArrowLeft: e => {
+		e.preventDefault();
+		restorePriorRuleset();
+		showInfo('Undo ruleset change');
+	},
 	Space: () => {
 		isPaused = !isPaused;
+		if (!isPaused) needsDisplayUpdate = true;
 		showInfo(isPaused ? 'Paused' : 'Playing');
 	},
 	'Shift+?': () => instructionsContainer.classList.toggle('show'),
@@ -205,7 +229,8 @@ let isPaused = false;
 const weights = new Float32Array(MAX_N_STATES);
 const rules = new Uint8Array(MAX_N_RULES);
 let colors = new Float32Array(MAX_N_STATES * 3);
-let nextPaletteIdx = 0;
+let currentPaletteId = paletteIds[0];
+let paletteOrderIdx = 0;
 let nextWeightsIdx = 0;
 
 const ringInnerRadii = new Float32Array(MAX_N_RINGS);
@@ -301,6 +326,8 @@ void main() {
 		float outerR = u_ringOuter[ring];
 		float ringW = u_ringWeights[ring];
 		int iOuter = int(outerR);
+		float innerR2 = innerR * innerR;
+		float outerR2 = outerR * outerR;
 
 		float ringSum = 0.0;
 		for (int dx = -${MAX_NEIGHBOR_RANGE}; dx <= ${MAX_NEIGHBOR_RANGE}; dx++) {
@@ -308,8 +335,8 @@ void main() {
 			for (int dy = -${MAX_NEIGHBOR_RANGE}; dy <= ${MAX_NEIGHBOR_RANGE}; dy++) {
 				if (dy < -iOuter || dy > iOuter) continue;
 				if (dx == 0 && dy == 0) continue;
-				float dist = length(vec2(float(dx), float(dy)));
-				if (dist < innerR || dist > outerR) continue;
+				float dist2 = float(dx * dx + dy * dy);
+				if (dist2 < innerR2 || dist2 > outerR2) continue;
 				if (u_vonNeumann != 0 && (abs(dx) + abs(dy) > iOuter)) continue;
 				ringSum += u_weights[getState(v_uv + vec2(float(dx), float(dy)) * onePixel)];
 			}
@@ -368,7 +395,7 @@ function getColorsForUniform() {
 	return Array.from({ length: MAX_N_STATES }, (_, i) => [colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]]);
 }
 
-const MAX_RULESET_HISTORY = 32;
+const MAX_RULESET_HISTORY = 128;
 function pushRulesetToHistory() {
 	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
 		(acc, weight) => {
@@ -400,15 +427,75 @@ function restorePriorRuleset() {
 	rules.fill(0);
 	rules.set(entry.rules, 0);
 	minNeighborWeight = entry.minNeighborWeight;
+	applyRulesToShader(entry.rules.length);
+}
+
+function applyRulesToShader(ruleCount) {
 	if (updateShader) {
 		updateShader.updateTextures({
 			u_rules: { data: rules, width: MAX_N_RULES, height: 1 },
 		});
 		updateShader.updateUniforms({
-			u_nRules: entry.rules.length,
+			u_nRules: ruleCount,
 			u_minNeighborWeight: minNeighborWeight,
 		});
 	}
+}
+
+function generateNewRuleset() {
+	const ruleCount = getCurrentRuleCount();
+	if (ruleCount < 1) return;
+	const newRules = Array.from({ length: ruleCount }, (_, i) => {
+		if (i < nStates && cellInertia < 1) return i + 1;
+		return Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
+	});
+	shuffleArray(newRules);
+	rules.set(newRules, 0);
+	applyRulesToShader(ruleCount);
+}
+
+function getCurrentRuleCount() {
+	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
+		(acc, weight) => {
+			if (weight < acc.minWeight) acc.minWeight = weight;
+			if (weight > acc.maxWeight) acc.maxWeight = weight;
+			return acc;
+		},
+		{ minWeight: Infinity, maxWeight: -Infinity },
+	);
+	let totalMaxSum = 0;
+	for (let i = 0; i < nRings; i++) {
+		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
+		const rw = ringWeights[i];
+		totalMaxSum += (rw >= 0 ? maxWeight : minWeight) * cells * Math.abs(rw);
+	}
+	const nRulesNeeded = Math.floor(totalMaxSum) - minNeighborWeight + 1;
+	return Math.min(Math.max(nRulesNeeded, 1), MAX_N_RULES);
+}
+
+function mutateRuleset(variant) {
+	pushRulesetToHistory();
+	const ruleCount = getCurrentRuleCount();
+	if (ruleCount < 1) return;
+
+	if (variant === 'swap') {
+		const nSwaps = Math.max(1, Math.floor(ruleCount * 0.1));
+		for (let s = 0; s < nSwaps; s++) {
+			const i = Math.floor(Math.random() * ruleCount);
+			const j = Math.floor(Math.random() * ruleCount);
+			const tmp = rules[i];
+			rules[i] = rules[j];
+			rules[j] = tmp;
+		}
+	} else {
+		const nPointMutations = Math.max(1, Math.floor(ruleCount * 0.1));
+		for (let s = 0; s < nPointMutations; s++) {
+			const i = Math.floor(Math.random() * ruleCount);
+			rules[i] = Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
+		}
+	}
+
+	applyRulesToShader(ruleCount);
 }
 
 function countCellsInRing(innerR, outerR) {
@@ -425,7 +512,7 @@ function countCellsInRing(innerR, outerR) {
 	return count;
 }
 
-function updateUniforms() {
+function recalcMinNeighborWeight() {
 	generateRings();
 
 	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
@@ -456,36 +543,153 @@ function updateUniforms() {
 		console.error('Too many rules:', nRulesNeeded, weights);
 		showError();
 	}
-	const ruleCount = Math.min(nRulesNeeded, MAX_N_RULES);
-	const newRules = Array.from({ length: ruleCount }, (_, i) => {
-		if (i < nStates && cellInertia < 1) return i + 1;
-		return Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
-	});
-	shuffleArray(newRules);
-	rules.set(newRules, 0);
+}
 
-	if (updateShader) {
-		updateShader.updateTextures({
-			u_rules: { data: rules, width: MAX_N_RULES, height: 1 },
-		});
-		updateShader.updateUniforms({
-			u_weights: Array.from(weights),
-			u_nRules: ruleCount,
-			u_minNeighborWeight: minNeighborWeight,
-			u_maxNeighborRange: neighborRange,
-			u_vonNeumann: isVonNeumann ? 1 : 0,
-			u_nRings: nRings,
-			u_ringInner: Array.from(ringInnerRadii),
-			u_ringOuter: Array.from(ringOuterRadii),
-			u_ringWeights: Array.from(ringWeights),
-		});
+function syncShaderUniforms() {
+	if (!updateShader) return;
+	const ruleCount = getCurrentRuleCount();
+	updateShader.updateTextures({
+		u_rules: { data: rules, width: MAX_N_RULES, height: 1 },
+	});
+	updateShader.updateUniforms({
+		u_weights: Array.from(weights),
+		u_nRules: ruleCount,
+		u_minNeighborWeight: minNeighborWeight,
+		u_maxNeighborRange: neighborRange,
+		u_vonNeumann: isVonNeumann ? 1 : 0,
+		u_nRings: nRings,
+		u_ringInner: Array.from(ringInnerRadii),
+		u_ringOuter: Array.from(ringOuterRadii),
+		u_ringWeights: Array.from(ringWeights),
+	});
+}
+
+const STATE_VERSION = 1;
+const WEIGHT_SCALE = 255 / MAX_WEIGHT;
+
+function packState() {
+	const ruleCount = getCurrentRuleCount();
+	if (ruleCount < 1) return null;
+	const n = 1 + 1 + 1 + 1 + 1 + 1 + 3 + 2 + 2 + ruleCount + nStates;
+	const buf = new Uint8Array(n);
+	const dv = new DataView(buf.buffer);
+	let off = 0;
+	buf[off++] = STATE_VERSION;
+	buf[off++] = nStates;
+	buf[off++] = neighborRange;
+	buf[off++] = nRings;
+	buf[off++] = Math.round(cellInertia * 255);
+	buf[off++] = (isVonNeumann ? 1 : 0) | (nextWeightsIdx << 1);
+	for (let i = 0; i < 3; i++) buf[off++] = currentPaletteId.charCodeAt(i);
+	dv.setInt16(off, minNeighborWeight, true);
+	off += 2;
+	dv.setUint16(off, ruleCount, true);
+	off += 2;
+	for (let i = 0; i < ruleCount; i++) buf[off++] = rules[i];
+	for (let i = 0; i < nStates; i++) buf[off++] = Math.min(255, Math.round(weights[i] * WEIGHT_SCALE));
+	return buf;
+}
+
+function unpackState(buf) {
+	if (!buf || buf.length < 13) return false;
+	const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+	let off = 0;
+	const version = buf[off++];
+	if (version !== STATE_VERSION) return false;
+
+	const newNStates = buf[off++];
+	const newNeighborRange = buf[off++];
+	const newNRings = buf[off++];
+	const newCellInertia = buf[off++] / 255;
+	const flags = buf[off++];
+	const newIsVonNeumann = (flags & 1) !== 0;
+	const newNextWeightsIdx = (flags >> 1) & 3;
+	const newPaletteId = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2]);
+	off += 3;
+	const newMinNeighborWeight = dv.getInt16(off, true);
+	off += 2;
+	const ruleCount = dv.getUint16(off, true);
+	off += 2;
+
+	if (buf.length < off + ruleCount + newNStates) return false;
+
+	nStates = newNStates;
+	neighborRange = newNeighborRange;
+	nRings = newNRings;
+	cellInertia = newCellInertia;
+	isVonNeumann = newIsVonNeumann;
+	nextWeightsIdx = newNextWeightsIdx;
+	currentPaletteId = newPaletteId in rawPalettes ? newPaletteId : paletteIds[0];
+	paletteOrderIdx = paletteIds.indexOf(currentPaletteId);
+	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
+	minNeighborWeight = newMinNeighborWeight;
+
+	rules.fill(0);
+	for (let i = 0; i < ruleCount; i++) rules[i] = buf[off++];
+	for (let i = 0; i < nStates; i++) weights[i] = buf[off++] / WEIGHT_SCALE;
+
+	return { ruleCount };
+}
+
+function encodeStateToUrl() {
+	const buf = packState();
+	return buf ? compressToUrl(buf) : null;
+}
+
+function restoreStateFromUrl(encoded) {
+	try {
+		const buf = decompressFromUrl(encoded);
+		const result = unpackState(buf);
+		if (!result) return false;
+
+		generateRings();
+		const palette = rawPalettes[currentPaletteId] || rawPalettes[paletteIds[0]];
+		const normalizedPalette = palette.map(hexToNormalizedRGB);
+		for (let i = 0; i < MAX_N_STATES; ++i) {
+			const rgbComponents = [...normalizedPalette[i % normalizedPalette.length]];
+			if (i >= normalizedPalette.length) {
+				for (let j = 0; j < rgbComponents.length; ++j) {
+					rgbComponents[j] = Math.max(0, Math.min(1, rgbComponents[j] + Math.random() * 0.1 - 0.05));
+				}
+			}
+			const rIdx = i * 3;
+			colors[rIdx] = rgbComponents[0];
+			colors[rIdx + 1] = rgbComponents[1];
+			colors[rIdx + 2] = rgbComponents[2];
+		}
+
+		if (updateShader) {
+			syncShaderUniforms();
+			applyRulesToShader(result.ruleCount);
+		}
+		if (displayShader) {
+			displayShader.updateUniforms({ u_colors: getColorsForUniform() });
+		}
+		needsDisplayUpdate = true;
+		return true;
+	} catch {
+		return false;
 	}
 }
 
-function setNeighborRange(newNeighborRange) {
+function updateUniforms() {
+	recalcMinNeighborWeight();
+	generateNewRuleset();
+	syncShaderUniforms();
+}
+
+function updateUniformsKeepRuleset() {
+	recalcMinNeighborWeight();
+	syncShaderUniforms();
+}
+
+function setNeighborRange(newNeighborRange, keepRuleset = false) {
 	neighborRange = newNeighborRange;
-	rulesetHistory.length = 0;
-	updateUniforms();
+	if (keepRuleset) {
+		updateUniformsKeepRuleset();
+	} else {
+		updateUniforms();
+	}
 }
 
 const N_WEIGHT_DISTRIBUTIONS = 4;
@@ -512,14 +716,15 @@ function updateWeights(direction = 1) {
 			returnLabel = 'random';
 			break;
 	}
-	rulesetHistory.length = 0;
-	updateUniforms();
+	updateUniformsKeepRuleset();
 	return returnLabel;
 }
 
 function updateColors(direction = 1) {
-	nextPaletteIdx = (palettes.length + nextPaletteIdx + direction) % palettes.length;
-	const normalizedPalette = palettes[nextPaletteIdx].map(hexToNormalizedRGB);
+	paletteOrderIdx = (paletteIds.length + paletteOrderIdx + direction) % paletteIds.length;
+	currentPaletteId = paletteIds[paletteOrderIdx];
+	const palette = rawPalettes[currentPaletteId];
+	const normalizedPalette = palette.map(hexToNormalizedRGB);
 	for (let i = 0; i < MAX_N_STATES; ++i) {
 		const rgbComponents = [...normalizedPalette[i % normalizedPalette.length]];
 		if (i >= normalizedPalette.length) {
@@ -533,6 +738,7 @@ function updateColors(direction = 1) {
 		colors[rIdx + 2] = rgbComponents[2];
 	}
 	if (displayShader) displayShader.updateUniforms({ u_colors: getColorsForUniform() });
+	needsDisplayUpdate = true;
 }
 
 let hideErrorTimeout;
@@ -587,16 +793,35 @@ setCanvasSize();
 createShaders();
 setupResizeObserver();
 
-function render() {
-	setCanvasSize();
+function tryRestoreFromHash() {
+	const hash = location.hash.slice(1);
+	if (hash) {
+		if (restoreStateFromUrl(hash)) {
+			scramble();
+			return true;
+		}
+	}
+	return false;
+}
 
+tryRestoreFromHash();
+
+window.addEventListener('hashchange', () => {
+	if (tryRestoreFromHash()) {
+		scramble();
+	}
+});
+
+function render() {
 	if (!isPaused && updateShader) {
 		updateShader.step();
+		needsDisplayUpdate = true;
 	}
 
-	if (displayShader) {
+	if (needsDisplayUpdate && displayShader) {
 		displayShader.updateTextures({ u_stateTexture: updateShader });
 		displayShader.draw();
+		needsDisplayUpdate = false;
 	}
 	requestAnimationFrame(render);
 }

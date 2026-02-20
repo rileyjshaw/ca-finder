@@ -13,6 +13,7 @@
     "vite-plugin-glsl": "^1.5.5"
   },
   "dependencies": {
+    "fflate": "^0.8.2",
     "shaderpad": "^1.0.0-beta.61",
     "tinykeys": "^3.0.0"
   }
