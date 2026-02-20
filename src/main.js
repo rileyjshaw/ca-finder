@@ -23,23 +23,13 @@ we sum the neighbor weights (shown) and get 5. We look that up in the rule array
 
 and determine that it should remain unchanged. */
 
-import {
-	createProgramInfo,
-	createBufferInfoFromArrays,
-	createFramebufferInfo,
-	createTexture,
-	drawBufferInfo,
-	resizeCanvasToDisplaySize,
-	setBuffersAndAttributes,
-	setUniforms,
-} from 'twgl-base.js';
 import { tinykeys } from 'tinykeys';
+import ShaderPad from 'shaderpad';
+import helpers from 'shaderpad/plugins/helpers';
+import save from 'shaderpad/plugins/save';
 
 import palettes from './palettes.js';
 import { generateFurthestSubsequentDistanceArray, hexToNormalizedRGB, shuffleArray } from './util.js';
-
-// Common vertex shader.
-import vsSource from './vertex.glsl';
 
 import './style.css';
 
@@ -47,46 +37,29 @@ import './style.css';
 const MAX_WEIGHT = 1.5;
 const MAX_N_STATES = 128;
 const MAX_NEIGHBOR_RANGE = 11;
-
-// This array gives the option to run multiple update programs per frame. Args
-// are [gridSize, canvasOffset].
-const stackedUpdates = [[1], [1, 0.25]];
+const MIN_STACKED_UPDATES = 1;
+const MAX_STACKED_UPDATES = 8;
 
 // Derived.
 const MAX_N_RULES = Math.floor(MAX_WEIGHT * (Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2) - 1) + 1);
-
-// Display fragment shader.
-const displayFsSource = `
-#version 300 es
-precision mediump float;
-precision mediump usampler2D;
-
-uniform usampler2D u_screenTexture;
-uniform vec3 u_colors[${MAX_N_STATES}];
-
-in vec2 v_texCoord;
-out vec4 FragColor;
-
-void main() {
-	uint cellState = texture(u_screenTexture, v_texCoord).r;
-	FragColor = vec4(u_colors[cellState].rgb, 1.0);
-}
-`;
+const STACKED_OFFSETS = Array.from({ length: MAX_STACKED_UPDATES }, (_, i) => i && 1 / (i + 1));
 
 tinykeys(window, {
-	// Change colors.
+	KeyB: () => {
+		if (displayShader?.save) displayShader.save('ca-finder-export.png');
+	},
 	KeyC: () => updateColors(),
 	'Shift+KeyC': () => updateColors(-1),
-	// Increase / decrease resolution density.
 	KeyD: () => {
 		resolutionMultiplier = Math.min(2, resolutionMultiplier * 2);
-		showInfo(`Density: ${resolutionMultiplier * 100}%`);
+		setCanvasSize();
+		showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
 	},
 	'Shift+KeyD': () => {
 		resolutionMultiplier /= 2;
-		showInfo(`Density: ${resolutionMultiplier * 100}%`);
+		setCanvasSize();
+		showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
 	},
-	// Increase / decrease cell inertia.
 	KeyI: () => {
 		cellInertia = Math.min(1, cellInertia + 0.05);
 		updateUniforms();
@@ -97,7 +70,6 @@ tinykeys(window, {
 		updateUniforms();
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
-	// Increase / decrease neighbor range.
 	KeyN: () => {
 		setNeighborRange(Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1));
 		showInfo(`Neighbor range: ${neighborRange}`);
@@ -106,127 +78,260 @@ tinykeys(window, {
 		setNeighborRange(Math.max(neighborRange - 1, 1));
 		showInfo(`Neighbor range: ${neighborRange}`);
 	},
-	// Change rules.
 	KeyR: () => {
 		updateUniforms();
-		showInfo('Rules changed');
 	},
-	// Scramble pixels.
-	KeyS: () => initBuffers(),
-	// Change neighborhood type.
-	// TODO: This isn’t well thought out; it should update minNeighborWeight, nRules, etc.
+	KeyS: () => scramble(),
+	KeyT: () => {
+		stackedUpdateCount = Math.min(MAX_STACKED_UPDATES, stackedUpdateCount + 1);
+		showInfo(`Stacked updates: ${stackedUpdateCount}`);
+	},
+	'Shift+KeyT': () => {
+		stackedUpdateCount = Math.max(MIN_STACKED_UPDATES, stackedUpdateCount - 1);
+		showInfo(`Stacked updates: ${stackedUpdateCount}`);
+	},
 	KeyV: () => {
 		isVonNeumann = !isVonNeumann;
+		updateUniforms();
 		showInfo(isVonNeumann ? 'Von Neumann neighborhood' : 'Moore neighborhood');
 	},
-	// Change weights.
 	KeyW: () => {
-		const label = updateWeights();
-		showInfo(`Weights: ${label}`);
+		showInfo(`Weights: ${updateWeights()}`);
 	},
 	'Shift+KeyW': () => {
-		const label = updateWeights(-1);
-		showInfo(`Weights: ${label}`);
+		showInfo(`Weights: ${updateWeights(-1)}`);
 	},
-	// Pause / play.
 	Space: () => {
 		isPaused = !isPaused;
 		showInfo(isPaused ? 'Paused' : 'Playing');
 	},
-	'Shift+?': () => {
-		instructionsContainer.classList.toggle('show');
-	},
-	Escape: () => {
-		instructionsContainer.classList.remove('show');
-	},
+	'Shift+?': () => instructionsContainer.classList.toggle('show'),
+	Escape: () => instructionsContainer.classList.remove('show'),
 });
 
-const instructionsContainer = document.getElementById('instructions');
-instructionsContainer.querySelector('button').addEventListener('click', () => {
-	instructionsContainer.classList.remove('show');
-});
+const displayFsSource = `#version 300 es
+precision mediump float;
+precision mediump usampler2D;
 
-let hideErrorTimeout;
-const errorContainer = document.getElementById('error');
-function showError() {
-	clearTimeout(hideErrorTimeout);
-	errorContainer.classList.add('show');
-	hideErrorTimeout = window.setTimeout(() => {
-		errorContainer.classList.remove('show');
-	}, 2000);
-}
+uniform usampler2D u_stateTexture;
+uniform vec3 u_colors[${MAX_N_STATES}];
 
-let hideInfoTimeout;
-const infoContainer = document.getElementById('info');
-function showInfo(text) {
-	clearTimeout(hideInfoTimeout);
-	infoContainer.textContent = text;
-	infoContainer.classList.add('show');
-	hideInfoTimeout = window.setTimeout(() => {
-		infoContainer.classList.remove('show');
-	}, 2000);
+in vec2 v_uv;
+out vec4 outColor;
+
+void main() {
+	uint cellState = texture(u_stateTexture, v_uv).r;
+	outColor = vec4(u_colors[cellState].rgb, 1.0);
 }
+`;
 
 const canvas = document.getElementById('canvas');
-const gl = canvas.getContext('webgl2', { antialias: false });
-gl.imageSmoothingEnabled = false;
+const R8UI_OPTIONS = {
+	internalFormat: 'R8UI',
+	format: 'RED_INTEGER',
+	type: 'UNSIGNED_BYTE',
+	minFilter: 'NEAREST',
+	magFilter: 'NEAREST',
+	wrapS: 'CLAMP_TO_EDGE',
+	wrapT: 'CLAMP_TO_EDGE',
+};
 
-const weights = new Float32Array(MAX_N_STATES);
-const rules = new Uint8Array(MAX_N_RULES);
+let updateShader;
+let displayShader;
 let nStates = 8;
 let cellInertia = 0.8;
 let isVonNeumann = false;
-let neighborRange, minNeighborWeight;
+let neighborRange;
+let minNeighborWeight;
+let stackedUpdateCount = 1;
+let resolutionMultiplier = 0.25;
+let isPaused = false;
 
-const displayShaderInfo = createProgramInfo(gl, [vsSource, displayFsSource]);
-const updateShaderInfos = stackedUpdates.map(args => createProgramInfo(gl, [vsSource, getUpdateFsSource(...args)]));
+const weights = new Float32Array(MAX_N_STATES);
+const rules = new Uint8Array(MAX_N_RULES);
+let colors = new Float32Array(MAX_N_STATES * 3);
+let nextPaletteIdx = 0;
+let nextWeightsIdx = 0;
+
+function getRandomTextureData(width, height) {
+	const size = width * height;
+	const data = new Uint8Array(size);
+	for (let i = 0; i < size; ++i) {
+		data[i] = Math.floor(Math.random() * nStates);
+	}
+	return data;
+}
+
+function createShaders() {
+	const w = canvas.width || 1;
+	const h = canvas.height || 1;
+	const seedData = getRandomTextureData(w, h);
+
+	updateShader = new ShaderPad(
+		`#version 300 es
+precision mediump float;
+precision mediump usampler2D;
+precision highp usampler2DArray;
+
+uniform usampler2DArray u_history;
+uniform int u_historyFrameOffset;
+uniform usampler2D u_seed;
+uniform float u_canvasOffset;
+uniform float u_weights[${MAX_N_STATES}];
+uniform uint u_rules[${MAX_N_RULES}];
+uniform uint u_minNeighborWeight;
+uniform int u_neighborRange;
+uniform int u_vonNeumann;
+uniform int u_frame;
+
+in vec2 v_uv;
+out uint outColor;
+
+uint getStateFromHistory(vec2 coord) {
+	coord = fract(coord);
+	float z = historyZ(u_history, u_historyFrameOffset, 1);
+	return texture(u_history, vec3(coord, z)).r;
+}
+
+uint getState(vec2 coord) {
+	if (u_frame == 0) {
+		coord = fract(coord);
+		return texture(u_seed, coord).r;
+	}
+	return getStateFromHistory(coord);
+}
+
+void main() {
+	vec2 onePixel = 1.0 / u_resolution;
+	vec2 canvasOffsetPx = u_resolution * u_canvasOffset;
+	uint state = getState(v_uv);
+
+	float sum = 0.0;
+	for (int dx = -u_neighborRange; dx <= u_neighborRange; dx++) {
+		for (int dy = -u_neighborRange; dy <= u_neighborRange; dy++) {
+			if (dx == 0 && dy == 0) continue;
+			if (u_vonNeumann != 0 && (abs(dx) + abs(dy) > u_neighborRange)) continue;
+			sum += u_weights[getState(v_uv + (canvasOffsetPx + vec2(float(dx), float(dy))) * onePixel)];
+		}
+	}
+	uint ruleIndex = uint(sum) - u_minNeighborWeight;
+	uint newState = u_rules[ruleIndex];
+
+	if (newState == 0u) {
+		outColor = state;
+	} else {
+		outColor = newState - 1u;
+	}
+}
+`,
+		{
+			canvas,
+			history: 2,
+			plugins: [helpers()],
+			...R8UI_OPTIONS,
+		},
+	);
+	updateShader.initializeTexture('u_seed', { data: seedData, width: w, height: h }, R8UI_OPTIONS);
+	updateShader.initializeUniform('u_weights', 'float', Array.from(weights), { arrayLength: MAX_N_STATES });
+	updateShader.initializeUniform('u_rules', 'uint', Array.from(rules), { arrayLength: MAX_N_RULES });
+	updateShader.initializeUniform('u_minNeighborWeight', 'uint', 0);
+	updateShader.initializeUniform('u_neighborRange', 'int', neighborRange);
+	updateShader.initializeUniform('u_vonNeumann', 'int', isVonNeumann ? 1 : 0);
+	updateShader.initializeUniform('u_canvasOffset', 'float', 0);
+	updateShader.on('updateResolution', (width, height) => {
+		updateShader.reset();
+		updateShader.updateTextures({
+			u_seed: { data: getRandomTextureData(width, height), width, height },
+		});
+		if (displayShader) displayShader.updateTextures({ u_stateTexture: updateShader });
+	});
+
+	displayShader = new ShaderPad(displayFsSource, {
+		canvas,
+		plugins: [helpers(), save()],
+	});
+	displayShader.initializeTexture('u_stateTexture', updateShader, R8UI_OPTIONS);
+	displayShader.initializeUniform('u_colors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
+}
+
+function getColorsForUniform() {
+	return Array.from({ length: MAX_N_STATES }, (_, i) => [colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]]);
+}
+
+function updateUniforms() {
+	const nNeighbors = Math.pow(neighborRange * 2 + 1, 2) - 1;
+	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
+		(acc, weight) => {
+			if (weight < acc.minWeight) acc.minWeight = weight;
+			if (weight > acc.maxWeight) acc.maxWeight = weight;
+			return acc;
+		},
+		{ minWeight: Infinity, maxWeight: -Infinity },
+	);
+	minNeighborWeight = Math.floor(minWeight * nNeighbors);
+	const maxNeighborWeight = Math.floor(maxWeight * nNeighbors);
+	const nRules = maxNeighborWeight - minNeighborWeight + 1;
+	if (nRules > MAX_N_RULES) {
+		console.error('Too many rules:', nRules, weights);
+		showError();
+	}
+	const newRules = Array.from({ length: nRules }, (_, i) => {
+		if (i < nStates && cellInertia < 1) return i + 1;
+		return Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
+	});
+	shuffleArray(newRules);
+	rules.set(newRules, 0);
+
+	if (updateShader) {
+		updateShader.updateUniforms({
+			u_weights: Array.from(weights),
+			u_rules: Array.from(rules),
+			u_minNeighborWeight: minNeighborWeight,
+			u_neighborRange: neighborRange,
+			u_vonNeumann: isVonNeumann ? 1 : 0,
+		});
+	}
+}
+
+function setNeighborRange(newNeighborRange) {
+	neighborRange = newNeighborRange;
+	updateUniforms();
+}
 
 const N_WEIGHT_DISTRIBUTIONS = 4;
-let nextWeightsIdx = Math.floor(Math.random() * N_WEIGHT_DISTRIBUTIONS);
 function updateWeights(direction = 1) {
 	let returnLabel = '';
 	nextWeightsIdx = (N_WEIGHT_DISTRIBUTIONS + nextWeightsIdx + direction) % N_WEIGHT_DISTRIBUTIONS;
 	switch (nextWeightsIdx) {
 		case 0:
-			for (let i = 0; i < MAX_N_STATES; ++i) {
-				weights[i] = (i % 2) * MAX_WEIGHT;
-			}
+			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = (i % 2) * MAX_WEIGHT;
 			returnLabel = '0, 1, 0, 1…';
 			break;
 		case 1:
 			weights.set(generateFurthestSubsequentDistanceArray(MAX_N_STATES, [0, MAX_WEIGHT]));
 			returnLabel = '0, 1, ½, ¾…';
 			break;
-		case 2:
+		case 2: {
 			const pattern = [0, 0.5, 1, 0.5, 0].map(n => n * MAX_WEIGHT);
-			for (let i = 0; i < MAX_N_STATES; ++i) {
-				weights[i] = pattern[i % pattern.length];
-			}
+			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = pattern[i % pattern.length];
 			returnLabel = '0, ½, 1, ½, 0…';
 			break;
+		}
 		case 3:
-			// Random…
-			for (let i = 0; i < MAX_N_STATES; ++i) {
-				weights[i] = Math.random() * MAX_WEIGHT;
-			}
+			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = Math.random() * MAX_WEIGHT;
 			returnLabel = 'random';
 			break;
 	}
-
 	updateUniforms();
 	return returnLabel;
 }
-updateWeights(0);
 
-let colors = new Float32Array(MAX_N_STATES * 3);
-let nextPaletteIdx = Math.floor(Math.random() * palettes.length);
 function updateColors(direction = 1) {
 	nextPaletteIdx = (palettes.length + nextPaletteIdx + direction) % palettes.length;
 	const normalizedPalette = palettes[nextPaletteIdx].map(hexToNormalizedRGB);
 	for (let i = 0; i < MAX_N_STATES; ++i) {
 		const rgbComponents = [...normalizedPalette[i % normalizedPalette.length]];
 		if (i >= normalizedPalette.length) {
-			// Add a small random offset to the RGB components for variety.
 			for (let j = 0; j < rgbComponents.length; ++j) {
 				rgbComponents[j] = Math.max(0, Math.min(1, rgbComponents[j] + Math.random() * 0.1 - 0.05));
 			}
@@ -236,203 +341,75 @@ function updateColors(direction = 1) {
 		colors[rIdx + 1] = rgbComponents[1];
 		colors[rIdx + 2] = rgbComponents[2];
 	}
+	if (displayShader) displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 }
+
+let hideErrorTimeout;
+const errorContainer = document.getElementById('error');
+function showError() {
+	clearTimeout(hideErrorTimeout);
+	errorContainer.classList.add('show');
+	hideErrorTimeout = window.setTimeout(() => errorContainer.classList.remove('show'), 2000);
+}
+
+let hideInfoTimeout;
+const infoContainer = document.getElementById('info');
+function showInfo(text) {
+	clearTimeout(hideInfoTimeout);
+	infoContainer.textContent = text;
+	infoContainer.classList.add('show');
+	hideInfoTimeout = window.setTimeout(() => infoContainer.classList.remove('show'), 2000);
+}
+
+setNeighborRange(2);
+updateWeights(0);
 updateColors(0);
 
-function setNeighborRange(newNeighborRange) {
-	neighborRange = newNeighborRange;
+const instructionsContainer = document.getElementById('instructions');
+instructionsContainer
+	.querySelector('button')
+	.addEventListener('click', () => instructionsContainer.classList.remove('show'));
 
-	updateUniforms();
-}
-setNeighborRange(2);
-
-function updateUniforms() {
-	const nNeighbors = Math.pow(neighborRange * 2 + 1, 2) - 1;
-
-	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
-		(acc, weight) => {
-			if (weight < acc.minWeight) acc.minWeight = weight;
-			if (weight > acc.maxWeight) acc.maxWeight = weight;
-			return acc;
-		},
-		{ minWeight: Infinity, maxWeight: -Infinity }
-	);
-
-	minNeighborWeight = Math.floor(minWeight * nNeighbors);
-	const maxNeighborWeight = Math.floor(maxWeight * nNeighbors);
-	const nRules = maxNeighborWeight - minNeighborWeight + 1;
-
-	if (nRules > MAX_N_RULES) {
-		console.error('Too many rules:', nRules, weights);
-		showError();
+function setCanvasSize() {
+	const dpr = window.devicePixelRatio || 1;
+	const w = Math.max(1, Math.floor(window.innerWidth * dpr * resolutionMultiplier));
+	const h = Math.max(1, Math.floor(window.innerHeight * dpr * resolutionMultiplier));
+	if (canvas.width !== w || canvas.height !== h) {
+		canvas.width = w;
+		canvas.height = h;
 	}
-
-	const newRules = Array.from({ length: nRules }, (_, i) => {
-		if (i < nStates && cellInertia < 1) return i + 1;
-		return Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
-	});
-	shuffleArray(newRules);
-	rules.set(newRules, 0);
 }
 
-// Update fragment shader.
-function getUpdateFsSource(gridSize = 1, canvasOffset = '0.0') {
-	return `
-	#version 300 es
-	precision mediump float;
-	precision mediump usampler2D;
+let resizeObserver;
+function setupResizeObserver() {
+	resizeObserver = new ResizeObserver(() => setCanvasSize());
+	resizeObserver.observe(canvas.parentElement || document.body);
+}
 
-	uniform usampler2D u_currentStateTexture;
-	uniform vec2 u_resolution;
-	uniform float u_weights[${MAX_N_STATES}];
-	uniform uint u_rules[${MAX_N_RULES}];
-	uniform uint u_minNeighborWeight;
-	uniform int u_neighborRange;
-	uniform bool u_von_neumann;
+function scramble() {
+	const { width, height } = canvas;
+	updateShader.reset();
+	updateShader.updateTextures({ u_seed: { data: getRandomTextureData(width, height), width, height } });
+}
 
-	in vec2 v_texCoord;
-	out uint State;
+setCanvasSize();
+createShaders();
+setupResizeObserver();
 
-	// Function to compute the state of a cell
-	uint getState(vec2 coord) {
-		coord = fract(coord); // Wrap the texture coordinates around [0, 1].
-		return texture(u_currentStateTexture, coord).r;
-	}
+function render() {
+	setCanvasSize();
 
-	void main() {
-		vec2 onePixel = vec2(${gridSize}.0) / u_resolution;
-		vec2 canvasOffset = u_resolution * ${canvasOffset};
-		uint state = getState(v_texCoord);
-
-		// Count alive neighbors
-		float sum = 0.0;
-		for (int dx = -u_neighborRange; dx <= u_neighborRange; dx++) {
-			for (int dy = -u_neighborRange; dy <= u_neighborRange; dy++) {
-				if (dx == 0 && dy == 0) continue;
-				if (u_von_neumann && (abs(dx) + abs(dy) > u_neighborRange)) continue; // Skip corners.
-				sum += u_weights[getState(v_texCoord + canvasOffset + vec2(dx, dy) * onePixel)];
-			}
-		}
-		uint ruleIndex = uint(sum) - u_minNeighborWeight; // Normalize to [0, maxNeighborWeight - minNeighborWeight].
-		uint newState = u_rules[ruleIndex];
-
-		if (newState == 0u) {
-			State = state;
-		} else {
-			State = newState - 1u;
+	if (!isPaused && updateShader) {
+		for (let i = 0; i < stackedUpdateCount; i++) {
+			updateShader.updateUniforms({ u_canvasOffset: STACKED_OFFSETS[i] });
+			updateShader.step();
 		}
 	}
-	`;
-}
 
-const arrays = {
-	position: {
-		numComponents: 2,
-		data: [
-			-1.0,
-			-1.0, // Bottom left.
-			1.0,
-			-1.0, // Bottom right.
-			-1.0,
-			1.0, // Top left.
-			1.0,
-			1.0, // Top right.
-		],
-	},
-};
-const bufferInfo = createBufferInfoFromArrays(gl, arrays);
-
-function getRandomTextureData(width, height) {
-	const size = width * height;
-	const data = new Uint8Array(size);
-	for (let i = 0; i < size; ++i) {
-		// Generate a random state.
-		const state = Math.floor(Math.random() * nStates);
-		data[i] = state;
+	if (displayShader) {
+		displayShader.updateTextures({ u_stateTexture: updateShader });
+		displayShader.draw();
 	}
-	return data;
-}
-
-function createRandomTexture(gl, width, height) {
-	return createTexture(gl, {
-		width,
-		height,
-		type: gl.UNSIGNED_BYTE,
-		format: gl.RED_INTEGER,
-		internalFormat: gl.R8UI,
-		minMag: gl.NEAREST,
-		wrap: gl.CLAMP_TO_EDGE,
-		src: getRandomTextureData(width, height),
-	});
-}
-
-// Ping-Pong setup.
-let textures = [];
-let fbos = [];
-function initBuffers() {
-	textures.forEach(texture => gl.deleteTexture(texture));
-	textures = [
-		createRandomTexture(gl, canvas.width, canvas.height),
-		createRandomTexture(gl, canvas.width, canvas.height),
-	];
-
-	fbos.forEach(fbo => gl.deleteFramebuffer(fbo.framebuffer));
-	fbos = textures.map(texture => createFramebufferInfo(gl, [{ attachment: texture }]));
-}
-
-let resolutionMultiplier = 0.5;
-function resize() {
-	if (resizeCanvasToDisplaySize(gl.canvas, resolutionMultiplier)) {
-		initBuffers(); // Reinitialize textures and FBOs on resize.
-		gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-	}
-}
-
-function runUpdateShader(programInfo) {
-	gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[nextStateTextureIndex].framebuffer);
-	gl.useProgram(programInfo.program);
-	setBuffersAndAttributes(gl, programInfo, bufferInfo);
-
-	// Pass data to the shader.
-	setUniforms(programInfo, {
-		u_weights: weights,
-		u_rules: rules,
-		u_minNeighborWeight: minNeighborWeight,
-		u_neighborRange: neighborRange,
-		u_currentStateTexture: textures[1 - nextStateTextureIndex], // Send the current state for feedback.
-		u_resolution: [gl.canvas.width, gl.canvas.height],
-		u_von_neumann: isVonNeumann,
-	});
-	drawBufferInfo(gl, bufferInfo, gl.TRIANGLE_STRIP);
-}
-
-let nextStateTextureIndex = 0;
-let isPaused = false;
-function render(time) {
-	time /= 1000; // Convert time to seconds.
-	resize();
-
-	// 1. Update the game state: Render to off-screen texture.
-	if (!isPaused) {
-		updateShaderInfos.forEach(updateShaderInfo => {
-			runUpdateShader(updateShaderInfo);
-
-			// Ping pong!
-			nextStateTextureIndex = 1 - nextStateTextureIndex;
-		});
-	}
-
-	// 2. Display the updated state: Render to the screen.
-	gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Bind the default framebuffer (the screen).
-	gl.useProgram(displayShaderInfo.program);
-	setBuffersAndAttributes(gl, displayShaderInfo, bufferInfo);
-
-	// Pass data to the display shader.
-	setUniforms(displayShaderInfo, {
-		u_screenTexture: textures[1 - nextStateTextureIndex], // Send the updated state.
-		u_colors: colors,
-	});
-	drawBufferInfo(gl, bufferInfo, gl.TRIANGLE_STRIP);
 	requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

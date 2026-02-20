@@ -73,9 +73,9 @@ canvas {
 }
 
 #instructions > div {
-	height: 100%;
-	margin: auto;
+	min-height: 100%;
 	max-width: 48em;
+	margin: auto;
 }
 
 h1,
