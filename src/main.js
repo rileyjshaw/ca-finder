@@ -595,10 +595,7 @@ function saveToSlot(n) {
 function applySlot(n) {
 	const encoded = slots[n];
 	if (!encoded) return;
-	if (restoreStateFromUrl(encoded)) {
-		scramble();
-		showInfo(`Slot ${n} applied`);
-	}
+	restoreStateFromUrl(encoded);
 }
 
 window.addEventListener('keydown', ({ key, repeat }) => {
