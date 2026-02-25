@@ -564,6 +564,63 @@ function syncShaderUniforms() {
 	});
 }
 
+const SLOT_HOLD_MS = 400;
+const slots = Array.from({ length: 10 }, () => null);
+let slotHoldTimer = null;
+let slotHoldN = null;
+
+function loadSlotsFromStorage() {
+	try {
+		const raw = localStorage.getItem('ca-finder-slots');
+		if (!raw) return;
+		const data = JSON.parse(raw);
+		for (let i = 0; i < 10; i++) slots[i] = data[i] || null;
+	} catch {
+		// ignore
+	}
+}
+
+function saveSlotsToStorage() {
+	localStorage.setItem('ca-finder-slots', JSON.stringify(slots));
+}
+
+function saveToSlot(n) {
+	const encoded = encodeStateToUrl();
+	if (!encoded) return;
+	slots[n] = encoded;
+	saveSlotsToStorage();
+	showInfo(`Slot ${n} saved`);
+}
+
+function applySlot(n) {
+	const encoded = slots[n];
+	if (!encoded) return;
+	if (restoreStateFromUrl(encoded)) {
+		scramble();
+		showInfo(`Slot ${n} applied`);
+	}
+}
+
+window.addEventListener('keydown', ({ key, repeat }) => {
+	if (repeat || key < '0' || key > '9') return;
+	const n = parseInt(key, 10);
+	clearTimeout(slotHoldTimer);
+	slotHoldN = n;
+	slotHoldTimer = setTimeout(() => {
+		slotHoldN = null;
+		saveToSlot(n);
+	}, SLOT_HOLD_MS);
+});
+
+window.addEventListener('keyup', ({ key }) => {
+	if (key < '0' || key > '9') return;
+	const n = parseInt(key, 10);
+	if (slotHoldN !== n) return;
+	clearTimeout(slotHoldTimer);
+	slotHoldN = null;
+	applySlot(n);
+});
+
 const STATE_VERSION = 1;
 const WEIGHT_SCALE = 255 / MAX_WEIGHT;
 
@@ -804,6 +861,7 @@ function tryRestoreFromHash() {
 	return false;
 }
 
+loadSlotsFromStorage();
 tryRestoreFromHash();
 
 window.addEventListener('hashchange', () => {
