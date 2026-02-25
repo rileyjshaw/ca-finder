@@ -58,7 +58,7 @@ tinykeys(window, {
 			if (location.hash !== hash) {
 				history.replaceState(null, '', location.pathname + location.search + hash);
 			}
-			const safeName = encoded.length <= 64 ? encoded : encoded.slice(0, 64);
+			const safeName = encoded.length <= 240 ? encoded : encoded.slice(0, 240);
 			displayShader.save(`ca-${safeName}.png`);
 		} else {
 			displayShader.save('ca-export.png');
@@ -850,13 +850,17 @@ function getOrCreateImageSeedShader() {
 		canvas,
 		...R8UI_OPTIONS,
 	});
-	imageSeedShader.initializeTexture('u_image', { data: new Uint8Array(4), width: 1, height: 1 }, {
-		internalFormat: 'RGBA8',
-		format: 'RGBA',
-		type: 'UNSIGNED_BYTE',
-		minFilter: 'NEAREST',
-		magFilter: 'NEAREST',
-	});
+	imageSeedShader.initializeTexture(
+		'u_image',
+		{ data: new Uint8Array(4), width: 1, height: 1 },
+		{
+			internalFormat: 'RGBA8',
+			format: 'RGBA',
+			type: 'UNSIGNED_BYTE',
+			minFilter: 'NEAREST',
+			magFilter: 'NEAREST',
+		},
+	);
 	imageSeedShader.initializeUniform('u_paletteColors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
 	imageSeedShader.initializeUniform('u_nStates', 'int', nStates);
 	return imageSeedShader;
@@ -867,7 +871,10 @@ function handleImageDrop(file) {
 	if (!filename.startsWith('ca-')) return;
 
 	const encoded = filename.slice(3);
-	if (!encoded) return;
+	if (!encoded) {
+		showError();
+		return;
+	}
 
 	if (!restoreStateFromUrl(encoded)) {
 		showError();
@@ -876,6 +883,10 @@ function handleImageDrop(file) {
 
 	const img = new Image();
 	const objectUrl = URL.createObjectURL(file);
+	img.onerror = () => {
+		URL.revokeObjectURL(objectUrl);
+		showError();
+	};
 	img.onload = () => {
 		URL.revokeObjectURL(objectUrl);
 
