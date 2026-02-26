@@ -307,21 +307,26 @@ uniform int u_nRings;
 uniform float u_ringInner[${MAX_N_RINGS}];
 uniform float u_ringOuter[${MAX_N_RINGS}];
 uniform float u_ringWeights[${MAX_N_RINGS}];
+uniform uint u_nStates;
 uniform int u_frame;
 
 in vec2 v_uv;
 out uint outColor;
 
+uint wrapState(uint s) {
+	return s % u_nStates;
+}
+
 uint getStateFromHistory(vec2 coord) {
 	coord = fract(coord);
 	float z = historyZ(u_history, u_historyFrameOffset, 1);
-	return texture(u_history, vec3(coord, z)).r;
+	return wrapState(texture(u_history, vec3(coord, z)).r);
 }
 
 uint getState(vec2 coord) {
 	if (u_frame == 0) {
 		coord = fract(coord);
-		return texture(u_seed, coord).r;
+		return wrapState(texture(u_seed, coord).r);
 	}
 	return getStateFromHistory(coord);
 }
@@ -368,7 +373,7 @@ void main() {
 	if (newState == 0u) {
 		outColor = state;
 	} else {
-		outColor = newState - 1u;
+		outColor = wrapState(newState - 1u);
 	}
 }
 `,
@@ -382,6 +387,7 @@ void main() {
 	updateShader.initializeTexture('u_seed', { data: seedData, width: w, height: h }, R8UI_OPTIONS);
 	updateShader.initializeUniform('u_weights', 'float', Array.from(weights), { arrayLength: MAX_N_STATES });
 	updateShader.initializeTexture('u_rules', { data: rules, width: MAX_N_RULES, height: 1 }, R8UI_OPTIONS);
+	updateShader.initializeUniform('u_nStates', 'uint', nStates);
 	updateShader.initializeUniform('u_nRules', 'int', MAX_N_RULES);
 	updateShader.initializeUniform('u_minNeighborWeight', 'int', 0);
 	updateShader.initializeUniform('u_maxNeighborRange', 'int', neighborRange);
@@ -572,6 +578,7 @@ function syncShaderUniforms() {
 	});
 	updateShader.updateUniforms({
 		u_weights: Array.from(weights),
+		u_nStates: nStates,
 		u_nRules: ruleCount,
 		u_minNeighborWeight: minNeighborWeight,
 		u_maxNeighborRange: neighborRange,
