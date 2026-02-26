@@ -921,11 +921,13 @@ function getOrCreateImageSeedShader() {
 	return imageSeedShader;
 }
 
+const B64URL_CHARS = /^[A-Za-z0-9_-]*/;
+
 function handleImageDrop(file) {
 	const filename = file.name.replace(/\.[^.]+$/, '');
 	if (!filename.startsWith('ca-')) return;
 
-	const encoded = filename.slice(3);
+	const encoded = filename.slice(3).match(B64URL_CHARS)?.[0] ?? '';
 	if (!encoded) {
 		showError();
 		return;
