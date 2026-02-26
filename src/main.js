@@ -184,6 +184,10 @@ tinykeys(window, {
 		if (!isPaused) needsDisplayUpdate = true;
 		showInfo(isPaused ? 'Paused' : 'Playing');
 	},
+	BracketRight: () => changeBank(1),
+	'Shift+BracketRight': () => changeBank(-1),
+	BracketLeft: () => changeBank(-1),
+	'Shift+BracketLeft': () => changeBank(1),
 	'Shift+?': () => instructionsContainer.classList.toggle('show'),
 	Escape: () => instructionsContainer.classList.remove('show'),
 });
@@ -564,38 +568,65 @@ function syncShaderUniforms() {
 	});
 }
 
+const N_BANKS = 100;
+const SLOTS_PER_BANK = 10;
 const SLOT_HOLD_MS = 400;
-const slots = Array.from({ length: 10 }, () => null);
+const STORAGE_KEY = 'ca-finder';
+
+let currentBank = 0;
+let memory = {};
 let slotHoldTimer = null;
 let slotHoldN = null;
 
-function loadSlotsFromStorage() {
+function loadFromStorage() {
 	try {
-		const raw = localStorage.getItem('ca-finder-slots');
+		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return;
 		const data = JSON.parse(raw);
-		for (let i = 0; i < 10; i++) slots[i] = data[i] || null;
+		if (data.memory && typeof data.memory === 'object') memory = data.memory;
+		if (typeof data.bank === 'number') currentBank = Math.max(0, Math.min(N_BANKS - 1, data.bank));
 	} catch {
 		// ignore
 	}
 }
 
-function saveSlotsToStorage() {
-	localStorage.setItem('ca-finder-slots', JSON.stringify(slots));
+function saveToStorage() {
+	localStorage.setItem(STORAGE_KEY, JSON.stringify({ bank: currentBank, memory }));
+}
+
+function memoryKey(bank, slot) {
+	return `${bank}-${slot}`;
 }
 
 function saveToSlot(n) {
 	const encoded = encodeStateToUrl();
 	if (!encoded) return;
-	slots[n] = encoded;
-	saveSlotsToStorage();
-	showInfo(`Slot ${n} saved`);
+	const key = memoryKey(currentBank, n);
+	memory[key] = encoded;
+	saveToStorage();
+	showInfo(`Memory saved to ${key}`);
+	showBankSlots();
 }
 
 function applySlot(n) {
-	const encoded = slots[n];
+	const key = memoryKey(currentBank, n);
+	const encoded = memory[key];
 	if (!encoded) return;
 	restoreStateFromUrl(encoded);
+}
+
+function changeBank(direction) {
+	currentBank = (N_BANKS + currentBank + direction) % N_BANKS;
+	saveToStorage();
+	showInfo(`Memory bank ${currentBank.toString().padStart(2, '0')}`);
+	showBankSlots();
+}
+
+function showBankSlots() {
+	const dots = Array.from({ length: SLOTS_PER_BANK }, (_, i) =>
+		memory[memoryKey(currentBank, (i + 1) % SLOTS_PER_BANK)] ? '●' : '○',
+	).join(' ');
+	showSecondaryInfo(dots);
 }
 
 window.addEventListener('keydown', ({ key, repeat }) => {
@@ -795,12 +826,17 @@ function updateColors(direction = 1) {
 	needsDisplayUpdate = true;
 }
 
-let hideErrorTimeout;
-const errorContainer = document.getElementById('error');
+let hideSecondaryInfoTimeout;
+const secondaryInfoContainer = document.getElementById('info-secondary');
+function showSecondaryInfo(text) {
+	clearTimeout(hideSecondaryInfoTimeout);
+	secondaryInfoContainer.textContent = text;
+	secondaryInfoContainer.classList.add('show');
+	hideSecondaryInfoTimeout = window.setTimeout(() => secondaryInfoContainer.classList.remove('show'), 2000);
+}
+
 function showError() {
-	clearTimeout(hideErrorTimeout);
-	errorContainer.classList.add('show');
-	hideErrorTimeout = window.setTimeout(() => errorContainer.classList.remove('show'), 2000);
+	showSecondaryInfo('!');
 }
 
 let hideInfoTimeout;
@@ -858,7 +894,7 @@ function tryRestoreFromHash() {
 	return false;
 }
 
-loadSlotsFromStorage();
+loadFromStorage();
 tryRestoreFromHash();
 
 window.addEventListener('hashchange', () => {

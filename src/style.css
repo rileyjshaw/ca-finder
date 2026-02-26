@@ -116,7 +116,7 @@ kbd {
 	height: 1em;
 }
 
-#error,
+#info-secondary,
 #info {
 	background: #000;
 	bottom: 24px;
@@ -129,7 +129,7 @@ kbd {
 	position: fixed;
 }
 
-#error {
+#info-secondary {
 	left: 24px;
 }
 
