@@ -52,12 +52,8 @@ const MAX_N_RULES = Math.floor(MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1
 let needsDisplayUpdate = true;
 tinykeys(window, {
 	Enter: () => {
-		const encoded = encodeStateToUrl();
+		const encoded = syncUrlFromState();
 		if (encoded != null) {
-			const hash = '#' + encoded;
-			if (location.hash !== hash) {
-				history.replaceState(null, '', location.pathname + location.search + hash);
-			}
 			const safeName = encoded.length <= 240 ? encoded : encoded.slice(0, 240);
 			displayShader.save(`ca-${safeName}.png`);
 		} else {
@@ -97,6 +93,7 @@ tinykeys(window, {
 		const next = Math.min(1, cellInertia + 0.05);
 		if (next !== cellInertia) {
 			cellInertia = next;
+			syncUrlFromState();
 		}
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
@@ -104,6 +101,7 @@ tinykeys(window, {
 		const next = Math.max(0, cellInertia - 0.05);
 		if (next !== cellInertia) {
 			cellInertia = next;
+			syncUrlFromState();
 		}
 		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
 	},
@@ -449,6 +447,7 @@ function restorePriorRuleset() {
 	rules.set(entry.rules, 0);
 	minNeighborWeight = entry.minNeighborWeight;
 	applyRulesToShader(entry.rules.length);
+	syncUrlFromState();
 }
 
 function applyRulesToShader(ruleCount) {
@@ -473,6 +472,7 @@ function generateNewRuleset() {
 	shuffleArray(newRules);
 	rules.set(newRules, 0);
 	applyRulesToShader(ruleCount);
+	syncUrlFromState();
 }
 
 function getCurrentRuleCount() {
@@ -517,6 +517,7 @@ function mutateRuleset(variant) {
 	}
 
 	applyRulesToShader(ruleCount);
+	syncUrlFromState();
 }
 
 function countCellsInRing(innerR, outerR) {
@@ -635,6 +636,7 @@ function applySlot(n) {
 	const encoded = memory[key];
 	if (!encoded) return;
 	restoreStateFromUrl(encoded);
+	syncUrlFromState();
 }
 
 function changeBank(direction) {
@@ -750,6 +752,16 @@ function encodeStateToUrl() {
 	return buf ? compressToUrl(buf) : null;
 }
 
+function syncUrlFromState() {
+	const encoded = encodeStateToUrl();
+	if (encoded == null) return null;
+	const hash = '#' + encoded;
+	if (location.hash !== hash) {
+		history.replaceState(null, '', location.pathname + location.search + hash);
+	}
+	return encoded;
+}
+
 function restoreStateFromUrl(encoded) {
 	try {
 		const buf = decompressFromUrl(encoded);
@@ -795,6 +807,7 @@ function updateUniforms() {
 function updateUniformsKeepRuleset() {
 	recalcMinNeighborWeight();
 	syncShaderUniforms();
+	syncUrlFromState();
 }
 
 function setNeighborRange(newNeighborRange, keepRuleset = false) {
@@ -853,6 +866,7 @@ function updateColors(direction = 1) {
 	}
 	if (displayShader) displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 	needsDisplayUpdate = true;
+	syncUrlFromState();
 }
 
 let hideSecondaryInfoTimeout;
@@ -1022,6 +1036,7 @@ function handleImageDrop(file) {
 		updateShader.updateTextures({ u_seed: shader });
 		if (displayShader) displayShader.updateTextures({ u_stateTexture: updateShader });
 		needsDisplayUpdate = true;
+		syncUrlFromState();
 
 		showInfo('Loaded from image');
 	};
