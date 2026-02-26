@@ -126,9 +126,14 @@ tinykeys(window, {
 		showInfo(`States: ${nStates}`);
 	},
 	KeyX: () => {
-		isVonNeumann = !isVonNeumann;
+		neighborhoodType = (neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES;
 		updateUniformsKeepRuleset();
-		showInfo(isVonNeumann ? 'Von Neumann neighborhood' : 'Moore neighborhood');
+		showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
+	},
+	'Shift+KeyX': () => {
+		neighborhoodType = (neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES;
+		updateUniformsKeepRuleset();
+		showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
 	},
 	KeyA: () => {
 		const next = Math.min(MAX_N_RINGS, nRings + 1);
@@ -223,7 +228,9 @@ let updateShader;
 let displayShader;
 let nStates = 8;
 let cellInertia = 0.8;
-let isVonNeumann = false;
+const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard'];
+const N_NEIGHBORHOOD_TYPES = NEIGHBORHOOD_TYPES.length;
+let neighborhoodType = 0;
 let neighborRange;
 let minNeighborWeight;
 let nRings = 2;
@@ -295,7 +302,7 @@ uniform usampler2D u_rules;
 uniform int u_nRules;
 uniform int u_minNeighborWeight;
 uniform int u_maxNeighborRange;
-uniform int u_vonNeumann;
+uniform int u_neighborhoodType;
 uniform int u_nRings;
 uniform float u_ringInner[${MAX_N_RINGS}];
 uniform float u_ringOuter[${MAX_N_RINGS}];
@@ -341,7 +348,11 @@ void main() {
 				if (dx == 0 && dy == 0) continue;
 				float dist2 = float(dx * dx + dy * dy);
 				if (dist2 < innerR2 || dist2 > outerR2) continue;
-				if (u_vonNeumann != 0 && (abs(dx) + abs(dy) > iOuter)) continue;
+				if (u_neighborhoodType == 1 && (abs(dx) + abs(dy) > iOuter)) continue; // Von Neumann
+				if (u_neighborhoodType == 2 && (dx != 0 && dy != 0)) continue; // Cross
+				if (u_neighborhoodType == 3 && (abs(dx) != abs(dy))) continue; // Star
+				if (u_neighborhoodType == 4 && (((dx + dy) & 1) != 0)) continue; // Checkerboard
+
 				ringSum += u_weights[getState(v_uv + vec2(float(dx), float(dy)) * onePixel)];
 			}
 		}
@@ -374,7 +385,7 @@ void main() {
 	updateShader.initializeUniform('u_nRules', 'int', MAX_N_RULES);
 	updateShader.initializeUniform('u_minNeighborWeight', 'int', 0);
 	updateShader.initializeUniform('u_maxNeighborRange', 'int', neighborRange);
-	updateShader.initializeUniform('u_vonNeumann', 'int', isVonNeumann ? 1 : 0);
+	updateShader.initializeUniform('u_neighborhoodType', 'int', neighborhoodType);
 	updateShader.initializeUniform('u_nRings', 'int', nRings);
 	updateShader.initializeUniform('u_ringInner', 'float', Array.from(ringInnerRadii), { arrayLength: MAX_N_RINGS });
 	updateShader.initializeUniform('u_ringOuter', 'float', Array.from(ringOuterRadii), { arrayLength: MAX_N_RINGS });
@@ -510,6 +521,10 @@ function countCellsInRing(innerR, outerR) {
 			if (dx === 0 && dy === 0) continue;
 			const dist = Math.sqrt(dx * dx + dy * dy);
 			if (dist < innerR || dist > outerR) continue;
+			if (neighborhoodType === 1 && Math.abs(dx) + Math.abs(dy) > iOuter) continue;
+			if (neighborhoodType === 2 && dx !== 0 && dy !== 0) continue;
+			if (neighborhoodType === 3 && Math.abs(dx) !== Math.abs(dy)) continue;
+			if (neighborhoodType === 4 && ((dx + dy) & 1) !== 0) continue;
 			count++;
 		}
 	}
@@ -560,7 +575,7 @@ function syncShaderUniforms() {
 		u_nRules: ruleCount,
 		u_minNeighborWeight: minNeighborWeight,
 		u_maxNeighborRange: neighborRange,
-		u_vonNeumann: isVonNeumann ? 1 : 0,
+		u_neighborhoodType: neighborhoodType,
 		u_nRings: nRings,
 		u_ringInner: Array.from(ringInnerRadii),
 		u_ringOuter: Array.from(ringOuterRadii),
@@ -649,7 +664,8 @@ window.addEventListener('keyup', ({ key }) => {
 	applySlot(n);
 });
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
+const SUPPORTED_STATE_VERSIONS = [1, 2];
 const WEIGHT_SCALE = 255 / MAX_WEIGHT;
 
 function packState() {
@@ -664,7 +680,7 @@ function packState() {
 	buf[off++] = neighborRange;
 	buf[off++] = nRings;
 	buf[off++] = Math.round(cellInertia * 255);
-	buf[off++] = (isVonNeumann ? 1 : 0) | (nextWeightsIdx << 1);
+	buf[off++] = (neighborhoodType & 0x07) | (nextWeightsIdx << 3);
 	for (let i = 0; i < 3; i++) buf[off++] = currentPaletteId.charCodeAt(i);
 	dv.setInt16(off, minNeighborWeight, true);
 	off += 2;
@@ -680,15 +696,21 @@ function unpackState(buf) {
 	const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 	let off = 0;
 	const version = buf[off++];
-	if (version !== STATE_VERSION) return false;
+	if (!SUPPORTED_STATE_VERSIONS.includes(version)) return false;
 
 	const newNStates = buf[off++];
 	const newNeighborRange = buf[off++];
 	const newNRings = buf[off++];
 	const newCellInertia = buf[off++] / 255;
 	const flags = buf[off++];
-	const newIsVonNeumann = (flags & 1) !== 0;
-	const newNextWeightsIdx = (flags >> 1) & 3;
+	let newNeighborhoodType, newNextWeightsIdx;
+	if (version === 1) {
+		newNeighborhoodType = (flags & 1) !== 0 ? 1 : 0;
+		newNextWeightsIdx = (flags >> 1) & 3;
+	} else {
+		newNeighborhoodType = flags & 0x07;
+		newNextWeightsIdx = (flags >> 3) & 3;
+	}
 	const newPaletteId = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2]);
 	off += 3;
 	const newMinNeighborWeight = dv.getInt16(off, true);
@@ -702,7 +724,7 @@ function unpackState(buf) {
 	neighborRange = newNeighborRange;
 	nRings = newNRings;
 	cellInertia = newCellInertia;
-	isVonNeumann = newIsVonNeumann;
+	neighborhoodType = newNeighborhoodType;
 	nextWeightsIdx = newNextWeightsIdx;
 	currentPaletteId = newPaletteId in rawPalettes ? newPaletteId : paletteIds[0];
 	paletteOrderIdx = paletteIds.indexOf(currentPaletteId);
