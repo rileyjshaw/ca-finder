@@ -891,7 +891,7 @@ function showInfo(text) {
 	hideInfoTimeout = window.setTimeout(() => infoContainer.classList.remove('show'), 2000);
 }
 
-setNeighborRange(2);
+setNeighborRange(4);
 updateWeights(0);
 updateColors(0);
 
