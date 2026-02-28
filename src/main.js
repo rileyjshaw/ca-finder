@@ -278,7 +278,7 @@ let displayShader;
 let nStates = 8;
 let cellInertia = 0.8;
 let isSemitotalistic = false;
-const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp'];
+const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp', 'Brick', 'Stair'];
 const N_WRAP_BEHAVIOURS = WRAP_BEHAVIOURS.length;
 let wrapBehaviour = 0;
 const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard'];
@@ -408,6 +408,15 @@ vec2 mapCoord(vec2 coord) {
 	}
 	if (u_wrapBehaviour == 1) {
 		return vec2(reflect1(coord.x), reflect1(coord.y));
+	}
+	if (u_wrapBehaviour == 2) {
+		return clamp(coord, vec2(0.0), vec2(1.0));
+	}
+	if (u_wrapBehaviour == 3) {
+		return vec2(fract(coord.x + floor(coord.y) * 0.5), fract(coord.y));
+	}
+	if (u_wrapBehaviour == 4) {
+		return vec2(fract(coord.x), fract(coord.y + floor(coord.x) * 0.5));
 	}
 	return clamp(coord, vec2(0.0), vec2(1.0));
 }
@@ -837,8 +846,8 @@ window.addEventListener(
 	}),
 );
 
-const STATE_VERSION = 3;
-const SUPPORTED_STATE_VERSIONS = [1, 2, 3];
+const STATE_VERSION = 4;
+const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4];
 const WEIGHT_SCALE = 255 / MAX_WEIGHT;
 
 function packState() {
@@ -860,7 +869,8 @@ function packState() {
 		((nextWeightsIdx & 0x03) << 3) |
 		(isSemitotalistic ? 0x20 : 0) |
 		((wrapBehaviour & 0x03) << 6);
-	buf[off++] = Math.min(MAX_N_STATES - 1, Math.max(0, paletteOffset));
+	const po = Math.min(MAX_N_STATES - 1, Math.max(0, paletteOffset));
+	buf[off++] = (po & 31) | ((wrapBehaviour >> 2) << 5);
 	for (let i = 0; i < 3; i++) buf[off++] = currentPaletteId.charCodeAt(i);
 	dv.setInt16(off, minNeighborWeight, true);
 	off += 2;
@@ -895,8 +905,8 @@ function unpackState(buf) {
 	} else {
 		newNeighborhoodType = flags & 0x07;
 		newNextWeightsIdx = (flags >> 3) & 3;
-		newIsSemitotalistic = version === 3 ? (flags & 0x20) !== 0 : false;
-		newWrapBehaviour = version === 3 ? (flags >> 6) & 0x03 : 0;
+		newIsSemitotalistic = version >= 3 ? (flags & 0x20) !== 0 : false;
+		newWrapBehaviour = version >= 3 ? (flags >> 6) & 0x03 : 0;
 	}
 	if (newNStates < MIN_N_STATES || newNStates > MAX_N_STATES) return false;
 
@@ -904,9 +914,11 @@ function unpackState(buf) {
 	let newPaletteId;
 	let newMinNeighborWeight;
 	let ruleCount;
-	if (version === 3) {
+	if (version >= 3) {
 		if (off + 8 > buf.length) return false;
-		newPaletteOffset = buf[off++];
+		const paletteByte = buf[off++];
+		newPaletteOffset = version >= 4 ? paletteByte & 31 : paletteByte;
+		if (version >= 4) newWrapBehaviour |= (paletteByte >> 5) << 2;
 		if (newPaletteOffset >= MAX_N_STATES) return false;
 		newPaletteId = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2]);
 		off += 3;
