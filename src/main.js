@@ -61,9 +61,14 @@ tinykeys(window, {
 		Object.entries({
 			Enter: () => {
 				const encoded = syncUrlFromState();
-				if (encoded != null) {
+				if (encoded != null && encoded.length <= MAX_ENCODED_STATE_LENGTH) {
 					displayShader.save(`ca-${encoded}.png`);
 				} else {
+					if (encoded?.length > MAX_ENCODED_STATE_LENGTH) {
+						window.alert(
+							`Encoded state exceeded ${MAX_ENCODED_STATE_LENGTH} characters; filename was truncated.`,
+						);
+					}
 					displayShader.save('ca-export.png');
 				}
 			},
@@ -777,7 +782,7 @@ function memoryKey(bank, slot) {
 }
 
 function saveToSlot(n) {
-	const encoded = encodeStateToUrl();
+	const encoded = encodeState();
 	if (!encoded) return;
 	const key = memoryKey(currentBank, n);
 	memory[key] = encoded;
@@ -837,7 +842,6 @@ window.addEventListener(
 const STATE_VERSION = 3;
 const SUPPORTED_STATE_VERSIONS = [1, 2, 3];
 const WEIGHT_SCALE = 255 / MAX_WEIGHT;
-let hasShownLongEncodingAlert = false;
 
 function packState() {
 	const ruleCount = getCurrentRuleCount();
@@ -966,23 +970,14 @@ function unpackState(buf) {
 	return { ruleCount };
 }
 
-function encodeStateToUrl() {
+function encodeState() {
 	const buf = packState();
 	if (!buf) return null;
-	const encoded = compressToUrl(buf);
-	if (encoded.length <= MAX_ENCODED_STATE_LENGTH) {
-		hasShownLongEncodingAlert = false;
-		return encoded;
-	}
-	if (!hasShownLongEncodingAlert) {
-		window.alert(`Encoded state exceeded ${MAX_ENCODED_STATE_LENGTH} characters and was truncated.`);
-		hasShownLongEncodingAlert = true;
-	}
-	return encoded.slice(0, MAX_ENCODED_STATE_LENGTH);
+	return compressToUrl(buf);
 }
 
 function syncUrlFromState() {
-	const encoded = encodeStateToUrl();
+	const encoded = encodeState();
 	if (encoded == null) return null;
 	const hash = '#' + encoded;
 	if (location.hash !== hash) {
