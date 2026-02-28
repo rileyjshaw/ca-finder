@@ -56,6 +56,12 @@ function ifInstructionsHidden(cb) {
 		if (!instructionsContainer.classList.contains('show')) cb(...args);
 	};
 }
+function syncUrl(cb) {
+	return (...args) => {
+		cb(...args);
+		syncUrlFromState();
+	};
+}
 tinykeys(window, {
 	...Object.fromEntries(
 		Object.entries({
@@ -89,61 +95,56 @@ tinykeys(window, {
 				}
 				showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
 			},
-			KeyC: () => updateColors(),
-			'Shift+KeyC': () => updateColors(-1),
-			KeyF: () => {
+			KeyC: syncUrl(() => updateColors()),
+			'Shift+KeyC': syncUrl(() => updateColors(-1)),
+			KeyF: syncUrl(() => {
 				isSemitotalistic = !isSemitotalistic;
 				syncShaderUniforms();
-				syncUrlFromState();
 				showInfo(isSemitotalistic ? 'Semitotalistic' : 'Totalistic');
-			},
-			KeyR: () => {
+			}),
+			KeyR: syncUrl(() => {
 				wrapBehaviour = (wrapBehaviour + 1) % N_WRAP_BEHAVIOURS;
 				syncShaderUniforms();
-				syncUrlFromState();
 				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
-			},
-			'Shift+KeyR': () => {
+			}),
+			'Shift+KeyR': syncUrl(() => {
 				wrapBehaviour = (wrapBehaviour + N_WRAP_BEHAVIOURS - 1) % N_WRAP_BEHAVIOURS;
 				syncShaderUniforms();
-				syncUrlFromState();
 				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
-			},
-			KeyV: () => {
+			}),
+			KeyV: syncUrl(() => {
 				setPaletteOffset(paletteOffset + 1);
 				showInfo(`Palette offset: ${paletteOffset}`);
-			},
-			'Shift+KeyV': () => {
+			}),
+			'Shift+KeyV': syncUrl(() => {
 				setPaletteOffset(paletteOffset - 1);
 				showInfo(`Palette offset: ${paletteOffset}`);
-			},
-			KeyQ: () => {
+			}),
+			KeyQ: syncUrl(() => {
 				const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
 				if (next !== neighborRange) setNeighborRange(next, true);
 				showInfo(`Neighbor range: ${neighborRange}`);
-			},
-			'Shift+KeyQ': () => {
+			}),
+			'Shift+KeyQ': syncUrl(() => {
 				const next = Math.max(neighborRange - 1, 1);
 				if (next !== neighborRange) setNeighborRange(next, true);
 				showInfo(`Neighbor range: ${neighborRange}`);
-			},
-			KeyE: () => {
+			}),
+			KeyE: syncUrl(() => {
 				const next = Math.min(1, cellInertia + 0.05);
 				if (next !== cellInertia) {
 					cellInertia = next;
-					syncUrlFromState();
 				}
 				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
-			},
-			'Shift+KeyE': () => {
+			}),
+			'Shift+KeyE': syncUrl(() => {
 				const next = Math.max(0, cellInertia - 0.05);
 				if (next !== cellInertia) {
 					cellInertia = next;
-					syncUrlFromState();
 				}
 				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
-			},
-			KeyZ: () => {
+			}),
+			KeyZ: syncUrl(() => {
 				const next = Math.min(MAX_N_STATES, nStates + 1);
 				if (next !== nStates) {
 					nStates = next;
@@ -151,8 +152,8 @@ tinykeys(window, {
 					scramble();
 				}
 				showInfo(`States: ${nStates}`);
-			},
-			'Shift+KeyZ': () => {
+			}),
+			'Shift+KeyZ': syncUrl(() => {
 				const next = Math.max(MIN_N_STATES, nStates - 1);
 				if (next !== nStates) {
 					nStates = next;
@@ -160,18 +161,18 @@ tinykeys(window, {
 					scramble();
 				}
 				showInfo(`States: ${nStates}`);
-			},
-			KeyX: () => {
+			}),
+			KeyX: syncUrl(() => {
 				neighborhoodType = (neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES;
 				updateUniformsKeepRuleset();
 				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
-			},
-			'Shift+KeyX': () => {
+			}),
+			'Shift+KeyX': syncUrl(() => {
 				neighborhoodType = (neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES;
 				updateUniformsKeepRuleset();
 				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
-			},
-			KeyA: () => {
+			}),
+			KeyA: syncUrl(() => {
 				const next = Math.min(MAX_N_RINGS, nRings + 1);
 				if (next !== nRings) {
 					nRings = next;
@@ -183,8 +184,8 @@ tinykeys(window, {
 					scramble();
 				}
 				showInfo(`Neighborhood rings: ${nRings}`);
-			},
-			'Shift+KeyA': () => {
+			}),
+			'Shift+KeyA': syncUrl(() => {
 				const next = Math.max(MIN_N_RINGS, nRings - 1);
 				if (next !== nRings) {
 					nRings = next;
@@ -192,44 +193,44 @@ tinykeys(window, {
 					scramble();
 				}
 				showInfo(`Neighborhood rings: ${nRings}`);
-			},
-			KeyW: () => {
+			}),
+			KeyW: syncUrl(() => {
 				showInfo(`Weights: ${updateWeights()}`);
-			},
-			'Shift+KeyW': () => {
+			}),
+			'Shift+KeyW': syncUrl(() => {
 				showInfo(`Weights: ${updateWeights(-1)}`);
-			},
-			ArrowRight: e => {
+			}),
+			ArrowRight: syncUrl(e => {
 				e.preventDefault();
 				if (redoRulesetChange()) {
 					showInfo('Redo');
 				} else {
 					showInfo('No redo history');
 				}
-			},
-			ArrowUp: e => {
+			}),
+			ArrowUp: syncUrl(e => {
 				e.preventDefault();
-				resetPaletteOffset(false);
+				resetPaletteOffset();
 				if (generateNewRuleset()) {
 					pushRulesetToHistory();
 					showInfo('New ruleset');
 				}
-			},
-			ArrowDown: e => {
+			}),
+			ArrowDown: syncUrl(e => {
 				e.preventDefault();
 				if (mutateRuleset()) {
 					pushRulesetToHistory();
 					showInfo('Mutate');
 				}
-			},
-			ArrowLeft: e => {
+			}),
+			ArrowLeft: syncUrl(e => {
 				e.preventDefault();
 				if (undoRulesetChange()) {
 					showInfo('Undo');
 				} else {
 					showInfo('No undo history');
 				}
-			},
+			}),
 			Space: () => {
 				isPaused = !isPaused;
 				if (!isPaused) needsDisplayUpdate = true;
@@ -522,7 +523,7 @@ function getColorsForUniform() {
 	});
 }
 
-function setPaletteOffset(nextOffset, shouldSyncUrl = true) {
+function setPaletteOffset(nextOffset) {
 	const nColors = rawPalettes[currentPaletteId].length;
 	const normalizedOffset = ((nextOffset % nColors) + nColors) % nColors;
 	if (paletteOffset === normalizedOffset) return false;
@@ -531,12 +532,11 @@ function setPaletteOffset(nextOffset, shouldSyncUrl = true) {
 		displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 	}
 	needsDisplayUpdate = true;
-	if (shouldSyncUrl) syncUrlFromState();
 	return true;
 }
 
-function resetPaletteOffset(shouldSyncUrl = true) {
-	return setPaletteOffset(0, shouldSyncUrl);
+function resetPaletteOffset() {
+	return setPaletteOffset(0);
 }
 
 const MAX_RULESET_HISTORY = 128;
@@ -640,7 +640,6 @@ function generateNewRuleset() {
 		setRuleset(ruleCount, stateIndex, createRandomRuleset(ruleCount));
 	}
 	applyRulesToShader(ruleCount);
-	syncUrlFromState();
 	return true;
 }
 
@@ -674,7 +673,6 @@ function mutateRuleset() {
 		rulesByState[i] = Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
 	}
 	applyRulesToShader(ruleCount);
-	syncUrlFromState();
 	return true;
 }
 
@@ -796,7 +794,6 @@ function applySlot(n) {
 	const encoded = memory[key];
 	if (!encoded) return;
 	restoreStateFromUrl(encoded);
-	syncUrlFromState();
 }
 
 function changeBank(direction) {
@@ -836,6 +833,7 @@ window.addEventListener(
 		clearTimeout(slotHoldTimer);
 		slotHoldN = null;
 		applySlot(n);
+		syncUrlFromState();
 	}),
 );
 
@@ -1032,7 +1030,6 @@ function updateUniforms() {
 function updateUniformsKeepRuleset() {
 	recalcMinNeighborWeight();
 	syncShaderUniforms();
-	syncUrlFromState();
 }
 
 function setNeighborRange(newNeighborRange, keepRuleset = false) {
@@ -1092,7 +1089,6 @@ function updateColors(direction = 1) {
 	}
 	if (displayShader) displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 	needsDisplayUpdate = true;
-	syncUrlFromState();
 }
 
 let hideSecondaryInfoTimeout;
