@@ -92,6 +92,18 @@ tinykeys(window, {
 				syncUrlFromState();
 				showInfo(isSemitotalistic ? 'Semitotalistic' : 'Totalistic');
 			},
+			KeyR: () => {
+				wrapBehaviour = (wrapBehaviour + 1) % N_WRAP_BEHAVIOURS;
+				syncShaderUniforms();
+				syncUrlFromState();
+				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
+			},
+			'Shift+KeyR': () => {
+				wrapBehaviour = (wrapBehaviour + N_WRAP_BEHAVIOURS - 1) % N_WRAP_BEHAVIOURS;
+				syncShaderUniforms();
+				syncUrlFromState();
+				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
+			},
 			KeyV: () => {
 				setPaletteOffset(paletteOffset + 1);
 				showInfo(`Palette offset: ${paletteOffset}`);
@@ -260,6 +272,9 @@ let displayShader;
 let nStates = 8;
 let cellInertia = 0.8;
 let isSemitotalistic = false;
+const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp'];
+const N_WRAP_BEHAVIOURS = WRAP_BEHAVIOURS.length;
+let wrapBehaviour = 0;
 const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard'];
 const N_NEIGHBORHOOD_TYPES = NEIGHBORHOOD_TYPES.length;
 let neighborhoodType = 0;
@@ -360,6 +375,7 @@ uniform int u_isSemitotalistic;
 uniform int u_minNeighborWeight;
 uniform int u_maxNeighborRange;
 uniform int u_neighborhoodType;
+uniform int u_wrapBehaviour;
 uniform int u_nRings;
 uniform float u_ringInner[${MAX_N_RINGS}];
 uniform float u_ringOuter[${MAX_N_RINGS}];
@@ -374,15 +390,31 @@ uint wrapState(uint s) {
 	return s % u_nStates;
 }
 
+float reflect1(float x) {
+	float t = mod(x, 2.0);
+	if (t < 0.0) t += 2.0;
+	return t <= 1.0 ? t : 2.0 - t;
+}
+
+vec2 mapCoord(vec2 coord) {
+	if (u_wrapBehaviour == 0) {
+		return fract(coord);
+	}
+	if (u_wrapBehaviour == 1) {
+		return vec2(reflect1(coord.x), reflect1(coord.y));
+	}
+	return clamp(coord, vec2(0.0), vec2(1.0));
+}
+
 uint getStateFromHistory(vec2 coord) {
-	coord = fract(coord);
+	coord = mapCoord(coord);
 	float z = historyZ(u_history, u_historyFrameOffset, 1);
 	return wrapState(texture(u_history, vec3(coord, z)).r);
 }
 
 uint getState(vec2 coord) {
 	if (u_frame == 0) {
-		coord = fract(coord);
+		coord = mapCoord(coord);
 		return wrapState(texture(u_seed, coord).r);
 	}
 	return getStateFromHistory(coord);
@@ -455,6 +487,7 @@ void main() {
 	updateShader.initializeUniform('u_minNeighborWeight', 'int', 0);
 	updateShader.initializeUniform('u_maxNeighborRange', 'int', neighborRange);
 	updateShader.initializeUniform('u_neighborhoodType', 'int', neighborhoodType);
+	updateShader.initializeUniform('u_wrapBehaviour', 'int', wrapBehaviour);
 	updateShader.initializeUniform('u_nRings', 'int', nRings);
 	updateShader.initializeUniform('u_ringInner', 'float', Array.from(ringInnerRadii), { arrayLength: MAX_N_RINGS });
 	updateShader.initializeUniform('u_ringOuter', 'float', Array.from(ringOuterRadii), { arrayLength: MAX_N_RINGS });
@@ -705,6 +738,7 @@ function syncShaderUniforms() {
 		u_minNeighborWeight: minNeighborWeight,
 		u_maxNeighborRange: neighborRange,
 		u_neighborhoodType: neighborhoodType,
+		u_wrapBehaviour: wrapBehaviour,
 		u_nRings: nRings,
 		u_ringInner: Array.from(ringInnerRadii),
 		u_ringOuter: Array.from(ringOuterRadii),
@@ -819,7 +853,11 @@ function packState() {
 	buf[off++] = neighborRange;
 	buf[off++] = nRings;
 	buf[off++] = Math.round(cellInertia * 255);
-	buf[off++] = (neighborhoodType & 0x07) | (nextWeightsIdx << 3) | (isSemitotalistic ? 0x20 : 0);
+	buf[off++] =
+		(neighborhoodType & 0x07) |
+		((nextWeightsIdx & 0x03) << 3) |
+		(isSemitotalistic ? 0x20 : 0) |
+		((wrapBehaviour & 0x03) << 6);
 	buf[off++] = Math.min(MAX_N_STATES - 1, Math.max(0, paletteOffset));
 	for (let i = 0; i < 3; i++) buf[off++] = currentPaletteId.charCodeAt(i);
 	dv.setInt16(off, minNeighborWeight, true);
@@ -846,15 +884,17 @@ function unpackState(buf) {
 	const newNRings = buf[off++];
 	const newCellInertia = buf[off++] / 255;
 	const flags = buf[off++];
-	let newNeighborhoodType, newNextWeightsIdx, newIsSemitotalistic;
+	let newNeighborhoodType, newNextWeightsIdx, newIsSemitotalistic, newWrapBehaviour;
 	if (version === 1) {
 		newNeighborhoodType = (flags & 1) !== 0 ? 1 : 0;
 		newNextWeightsIdx = (flags >> 1) & 3;
 		newIsSemitotalistic = false;
+		newWrapBehaviour = 0;
 	} else {
 		newNeighborhoodType = flags & 0x07;
 		newNextWeightsIdx = (flags >> 3) & 3;
 		newIsSemitotalistic = version === 3 ? (flags & 0x20) !== 0 : false;
+		newWrapBehaviour = version === 3 ? (flags >> 6) & 0x03 : 0;
 	}
 	if (newNStates < MIN_N_STATES || newNStates > MAX_N_STATES) return false;
 
@@ -893,6 +933,7 @@ function unpackState(buf) {
 	neighborhoodType = newNeighborhoodType;
 	nextWeightsIdx = newNextWeightsIdx;
 	isSemitotalistic = newIsSemitotalistic;
+	wrapBehaviour = newWrapBehaviour < N_WRAP_BEHAVIOURS ? newWrapBehaviour : 0;
 	currentPaletteId = newPaletteId in rawPalettes ? newPaletteId : paletteIds[0];
 	paletteOrderIdx = paletteIds.indexOf(currentPaletteId);
 	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
