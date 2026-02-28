@@ -51,171 +51,180 @@ const MAX_N_RULES = Math.floor(MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1
 const MAX_ENCODED_STATE_LENGTH = 240;
 
 let needsDisplayUpdate = true;
+function ifInstructionsHidden(cb) {
+	return (...args) => {
+		if (!instructionsContainer.classList.contains('show')) cb(...args);
+	};
+}
 tinykeys(window, {
-	Enter: () => {
-		const encoded = syncUrlFromState();
-		if (encoded != null) {
-			displayShader.save(`ca-${encoded}.png`);
-		} else {
-			displayShader.save('ca-export.png');
-		}
-	},
-	KeyS: () => scramble(),
-	KeyD: () => {
-		const next = Math.min(2, resolutionMultiplier * 2);
-		if (next !== resolutionMultiplier) {
-			resolutionMultiplier = next;
-			setCanvasSize();
-		}
-		showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
-	},
-	'Shift+KeyD': () => {
-		const next = resolutionMultiplier / 2;
-		if (next !== resolutionMultiplier) {
-			resolutionMultiplier = next;
-			setCanvasSize();
-		}
-		showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
-	},
-	KeyC: () => updateColors(),
-	'Shift+KeyC': () => updateColors(-1),
-	KeyF: () => {
-		isSemitotalistic = !isSemitotalistic;
-		syncShaderUniforms();
-		syncUrlFromState();
-		showInfo(isSemitotalistic ? 'Semitotalistic' : 'Totalistic');
-	},
-	KeyV: () => {
-		setPaletteOffset(paletteOffset + 1);
-		showInfo(`Palette offset: ${paletteOffset}`);
-	},
-	'Shift+KeyV': () => {
-		setPaletteOffset(paletteOffset - 1);
-		showInfo(`Palette offset: ${paletteOffset}`);
-	},
-	KeyQ: () => {
-		const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
-		if (next !== neighborRange) setNeighborRange(next, true);
-		showInfo(`Neighbor range: ${neighborRange}`);
-	},
-	'Shift+KeyQ': () => {
-		const next = Math.max(neighborRange - 1, 1);
-		if (next !== neighborRange) setNeighborRange(next, true);
-		showInfo(`Neighbor range: ${neighborRange}`);
-	},
-	KeyE: () => {
-		const next = Math.min(1, cellInertia + 0.05);
-		if (next !== cellInertia) {
-			cellInertia = next;
-			syncUrlFromState();
-		}
-		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
-	},
-	'Shift+KeyE': () => {
-		const next = Math.max(0, cellInertia - 0.05);
-		if (next !== cellInertia) {
-			cellInertia = next;
-			syncUrlFromState();
-		}
-		showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
-	},
-	KeyZ: () => {
-		const next = Math.min(MAX_N_STATES, nStates + 1);
-		if (next !== nStates) {
-			nStates = next;
-			updateUniformsKeepRuleset();
-			scramble();
-		}
-		showInfo(`States: ${nStates}`);
-	},
-	'Shift+KeyZ': () => {
-		const next = Math.max(MIN_N_STATES, nStates - 1);
-		if (next !== nStates) {
-			nStates = next;
-			updateUniformsKeepRuleset();
-			scramble();
-		}
-		showInfo(`States: ${nStates}`);
-	},
-	KeyX: () => {
-		neighborhoodType = (neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES;
-		updateUniformsKeepRuleset();
-		showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
-	},
-	'Shift+KeyX': () => {
-		neighborhoodType = (neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES;
-		updateUniformsKeepRuleset();
-		showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
-	},
-	KeyA: () => {
-		const next = Math.min(MAX_N_RINGS, nRings + 1);
-		if (next !== nRings) {
-			nRings = next;
-			const minRange = nRings * 2;
-			if (neighborRange < minRange) {
-				neighborRange = Math.min(MAX_NEIGHBOR_RANGE, minRange);
-			}
-			updateUniformsKeepRuleset();
-			scramble();
-		}
-		showInfo(`Neighborhood rings: ${nRings}`);
-	},
-	'Shift+KeyA': () => {
-		const next = Math.max(MIN_N_RINGS, nRings - 1);
-		if (next !== nRings) {
-			nRings = next;
-			updateUniformsKeepRuleset();
-			scramble();
-		}
-		showInfo(`Neighborhood rings: ${nRings}`);
-	},
-	KeyW: () => {
-		showInfo(`Weights: ${updateWeights()}`);
-	},
-	'Shift+KeyW': () => {
-		showInfo(`Weights: ${updateWeights(-1)}`);
-	},
-	ArrowRight: e => {
-		e.preventDefault();
-		if (redoRulesetChange()) {
-			showInfo('Redo');
-		} else {
-			showInfo('No redo history');
-		}
-	},
-	ArrowUp: e => {
-		e.preventDefault();
-		resetPaletteOffset(false);
-		if (generateNewRuleset()) {
-			pushRulesetToHistory();
-			showInfo('New ruleset');
-		}
-	},
-	ArrowDown: e => {
-		e.preventDefault();
-		if (mutateRuleset()) {
-			pushRulesetToHistory();
-			showInfo('Mutate');
-		}
-	},
-	ArrowLeft: e => {
-		e.preventDefault();
-		if (undoRulesetChange()) {
-			showInfo('Undo');
-		} else {
-			showInfo('No undo history');
-		}
-	},
-	Space: () => {
-		isPaused = !isPaused;
-		if (!isPaused) needsDisplayUpdate = true;
-		showInfo(isPaused ? 'Paused' : 'Playing');
-	},
-	BracketRight: () => changeBank(1),
-	'Shift+BracketRight': () => changeBank(-1),
-	BracketLeft: () => changeBank(-1),
-	'Shift+BracketLeft': () => changeBank(1),
-	'Shift+?': () => instructionsContainer.classList.toggle('show'),
+	...Object.fromEntries(
+		Object.entries({
+			Enter: () => {
+				const encoded = syncUrlFromState();
+				if (encoded != null) {
+					displayShader.save(`ca-${encoded}.png`);
+				} else {
+					displayShader.save('ca-export.png');
+				}
+			},
+			KeyS: scramble,
+			KeyD: () => {
+				const next = Math.min(2, resolutionMultiplier * 2);
+				if (next !== resolutionMultiplier) {
+					resolutionMultiplier = next;
+					setCanvasSize();
+				}
+				showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
+			},
+			'Shift+KeyD': () => {
+				const next = resolutionMultiplier / 2;
+				if (next !== resolutionMultiplier) {
+					resolutionMultiplier = next;
+					setCanvasSize();
+				}
+				showInfo(`Density: ${Math.round(resolutionMultiplier * 100)}%`);
+			},
+			KeyC: () => updateColors(),
+			'Shift+KeyC': () => updateColors(-1),
+			KeyF: () => {
+				isSemitotalistic = !isSemitotalistic;
+				syncShaderUniforms();
+				syncUrlFromState();
+				showInfo(isSemitotalistic ? 'Semitotalistic' : 'Totalistic');
+			},
+			KeyV: () => {
+				setPaletteOffset(paletteOffset + 1);
+				showInfo(`Palette offset: ${paletteOffset}`);
+			},
+			'Shift+KeyV': () => {
+				setPaletteOffset(paletteOffset - 1);
+				showInfo(`Palette offset: ${paletteOffset}`);
+			},
+			KeyQ: () => {
+				const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
+				if (next !== neighborRange) setNeighborRange(next, true);
+				showInfo(`Neighbor range: ${neighborRange}`);
+			},
+			'Shift+KeyQ': () => {
+				const next = Math.max(neighborRange - 1, 1);
+				if (next !== neighborRange) setNeighborRange(next, true);
+				showInfo(`Neighbor range: ${neighborRange}`);
+			},
+			KeyE: () => {
+				const next = Math.min(1, cellInertia + 0.05);
+				if (next !== cellInertia) {
+					cellInertia = next;
+					syncUrlFromState();
+				}
+				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
+			},
+			'Shift+KeyE': () => {
+				const next = Math.max(0, cellInertia - 0.05);
+				if (next !== cellInertia) {
+					cellInertia = next;
+					syncUrlFromState();
+				}
+				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
+			},
+			KeyZ: () => {
+				const next = Math.min(MAX_N_STATES, nStates + 1);
+				if (next !== nStates) {
+					nStates = next;
+					updateUniformsKeepRuleset();
+					scramble();
+				}
+				showInfo(`States: ${nStates}`);
+			},
+			'Shift+KeyZ': () => {
+				const next = Math.max(MIN_N_STATES, nStates - 1);
+				if (next !== nStates) {
+					nStates = next;
+					updateUniformsKeepRuleset();
+					scramble();
+				}
+				showInfo(`States: ${nStates}`);
+			},
+			KeyX: () => {
+				neighborhoodType = (neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES;
+				updateUniformsKeepRuleset();
+				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
+			},
+			'Shift+KeyX': () => {
+				neighborhoodType = (neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES;
+				updateUniformsKeepRuleset();
+				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
+			},
+			KeyA: () => {
+				const next = Math.min(MAX_N_RINGS, nRings + 1);
+				if (next !== nRings) {
+					nRings = next;
+					const minRange = nRings * 2;
+					if (neighborRange < minRange) {
+						neighborRange = Math.min(MAX_NEIGHBOR_RANGE, minRange);
+					}
+					updateUniformsKeepRuleset();
+					scramble();
+				}
+				showInfo(`Neighborhood rings: ${nRings}`);
+			},
+			'Shift+KeyA': () => {
+				const next = Math.max(MIN_N_RINGS, nRings - 1);
+				if (next !== nRings) {
+					nRings = next;
+					updateUniformsKeepRuleset();
+					scramble();
+				}
+				showInfo(`Neighborhood rings: ${nRings}`);
+			},
+			KeyW: () => {
+				showInfo(`Weights: ${updateWeights()}`);
+			},
+			'Shift+KeyW': () => {
+				showInfo(`Weights: ${updateWeights(-1)}`);
+			},
+			ArrowRight: e => {
+				e.preventDefault();
+				if (redoRulesetChange()) {
+					showInfo('Redo');
+				} else {
+					showInfo('No redo history');
+				}
+			},
+			ArrowUp: e => {
+				e.preventDefault();
+				resetPaletteOffset(false);
+				if (generateNewRuleset()) {
+					pushRulesetToHistory();
+					showInfo('New ruleset');
+				}
+			},
+			ArrowDown: e => {
+				e.preventDefault();
+				if (mutateRuleset()) {
+					pushRulesetToHistory();
+					showInfo('Mutate');
+				}
+			},
+			ArrowLeft: e => {
+				e.preventDefault();
+				if (undoRulesetChange()) {
+					showInfo('Undo');
+				} else {
+					showInfo('No undo history');
+				}
+			},
+			Space: () => {
+				isPaused = !isPaused;
+				if (!isPaused) needsDisplayUpdate = true;
+				showInfo(isPaused ? 'Paused' : 'Playing');
+			},
+			BracketRight: () => changeBank(1),
+			'Shift+BracketRight': () => changeBank(-1),
+			BracketLeft: () => changeBank(-1),
+			'Shift+BracketLeft': () => changeBank(1),
+			'Shift+?': () => instructionsContainer.classList.toggle('show'),
+		}).map(([key, cb]) => [key, ifInstructionsHidden(cb)]),
+	),
 	Escape: () => instructionsContainer.classList.remove('show'),
 });
 
@@ -765,25 +774,31 @@ function showBankSlots() {
 	showSecondaryInfo(dots);
 }
 
-window.addEventListener('keydown', ({ key, repeat }) => {
-	if (repeat || key < '0' || key > '9') return;
-	const n = parseInt(key, 10);
-	clearTimeout(slotHoldTimer);
-	slotHoldN = n;
-	slotHoldTimer = setTimeout(() => {
-		slotHoldN = null;
-		saveToSlot(n);
-	}, SLOT_HOLD_MS);
-});
+window.addEventListener(
+	'keydown',
+	ifInstructionsHidden(({ key, repeat }) => {
+		if (repeat || key < '0' || key > '9') return;
+		const n = parseInt(key, 10);
+		clearTimeout(slotHoldTimer);
+		slotHoldN = n;
+		slotHoldTimer = setTimeout(() => {
+			slotHoldN = null;
+			saveToSlot(n);
+		}, SLOT_HOLD_MS);
+	}),
+);
 
-window.addEventListener('keyup', ({ key }) => {
-	if (key < '0' || key > '9') return;
-	const n = parseInt(key, 10);
-	if (slotHoldN !== n) return;
-	clearTimeout(slotHoldTimer);
-	slotHoldN = null;
-	applySlot(n);
-});
+window.addEventListener(
+	'keyup',
+	ifInstructionsHidden(({ key }) => {
+		if (key < '0' || key > '9') return;
+		const n = parseInt(key, 10);
+		if (slotHoldN !== n) return;
+		clearTimeout(slotHoldTimer);
+		slotHoldN = null;
+		applySlot(n);
+	}),
+);
 
 const STATE_VERSION = 3;
 const SUPPORTED_STATE_VERSIONS = [1, 2, 3];
