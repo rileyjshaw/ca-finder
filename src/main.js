@@ -1164,7 +1164,6 @@ function tryRestoreFromHash() {
 }
 
 loadFromStorage();
-tryRestoreFromHash();
 resetRulesetHistory();
 
 window.addEventListener('hashchange', () => {
@@ -1295,4 +1294,6 @@ function render() {
 	}
 	requestAnimationFrame(render);
 }
+
+tryRestoreFromHash();
 requestAnimationFrame(render);
