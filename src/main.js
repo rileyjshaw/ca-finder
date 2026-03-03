@@ -951,7 +951,8 @@ function unpackState(buf) {
 	currentPaletteId = newPaletteId in rawPalettes ? newPaletteId : paletteIds[0];
 	paletteOrderIdx = paletteIds.indexOf(currentPaletteId);
 	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
-	paletteOffset = ((newPaletteOffset % nStates) + nStates) % nStates;
+	const nColors = rawPalettes[currentPaletteId].length;
+	paletteOffset = ((newPaletteOffset % nColors) + nColors) % nColors;
 	minNeighborWeight = newMinNeighborWeight;
 
 	rulesByState.fill(0);
