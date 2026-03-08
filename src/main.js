@@ -28,27 +28,60 @@ import ShaderPad from 'shaderpad';
 import helpers from 'shaderpad/plugins/helpers';
 import save from 'shaderpad/plugins/save';
 
-import rawPalettes, { paletteIds } from './palettes.js';
+import './palettes.js';
 import {
-	compressToUrl,
-	decompressFromUrl,
-	generateFurthestSubsequentDistanceArray,
-	hexToNormalizedRGB,
-	shuffleArray,
-} from './util.js';
-
-// Configurable.
-const MAX_WEIGHT = 1.5;
-const MIN_N_STATES = 2;
-const MAX_N_STATES = 32;
-const MAX_NEIGHBOR_RANGE = 12;
-const MIN_N_RINGS = 1;
-const MAX_N_RINGS = 8;
-
-// Derived.
-const MAX_CELLS_PER_RING = Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2);
-const MAX_N_RULES = Math.floor(MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
-const MAX_ENCODED_STATE_LENGTH = 240;
+	MAX_ENCODED_STATE_LENGTH,
+	MAX_N_RINGS,
+	MAX_N_RULES,
+	MAX_N_STATES,
+	MIN_N_STATES,
+	MAX_NEIGHBOR_RANGE,
+	NEIGHBORHOOD_TYPES,
+	N_NEIGHBORHOOD_TYPES,
+	N_WRAP_BEHAVIOURS,
+	WRAP_BEHAVIOURS,
+	applyColorsFromPalette,
+	countCellsInRing,
+	encodeState,
+	getColorsForUniform,
+	getCurrentRuleCount,
+	getMinNeighborWeight,
+	getNRings,
+	getNeighborRange,
+	getNStates,
+	setNStates,
+	getRingInnerRadii,
+	getRingOuterRadii,
+	getRingWeights,
+	getRulesByState,
+	getRuleset,
+	getWeights,
+	getStateSnapshot,
+	getEuclideanRings,
+	setRuleset,
+	setMinNeighborWeight,
+	createRandomRuleset,
+	generateRingRadii,
+	getIsSemitotalistic,
+	setIsSemitotalistic,
+	getWrapBehaviour,
+	setWrapBehaviour,
+	getNeighborhoodType,
+	setNeighborhoodType,
+	setNeighborRangeValue,
+	getCellInertia,
+	setCellInertia,
+	setNRings,
+	recalcMinNeighborWeight,
+	restoreStateFromUrl,
+	getPaletteOffset,
+	setPaletteOffset,
+	resetPaletteOffset,
+	unpackState,
+	updateWeights,
+	updateColorsState,
+} from './state.js';
+import { renderExplainPanel } from './explain-ruleset.js';
 
 let needsDisplayUpdate = true;
 function ifInstructionsHidden(cb) {
@@ -98,108 +131,124 @@ tinykeys(window, {
 			KeyC: syncUrl(() => updateColors()),
 			'Shift+KeyC': syncUrl(() => updateColors(-1)),
 			KeyF: syncUrl(() => {
-				isSemitotalistic = !isSemitotalistic;
+				setIsSemitotalistic(!getIsSemitotalistic());
 				syncShaderUniforms();
-				showInfo(isSemitotalistic ? 'Semitotalistic' : 'Totalistic');
+				showInfo(getIsSemitotalistic() ? 'Semitotalistic' : 'Totalistic');
 			}),
 			KeyR: syncUrl(() => {
-				wrapBehaviour = (wrapBehaviour + 1) % N_WRAP_BEHAVIOURS;
+				setWrapBehaviour((getWrapBehaviour() + 1) % N_WRAP_BEHAVIOURS);
 				syncShaderUniforms();
-				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
+				showInfo(`${WRAP_BEHAVIOURS[getWrapBehaviour()]}`);
 			}),
 			'Shift+KeyR': syncUrl(() => {
-				wrapBehaviour = (wrapBehaviour + N_WRAP_BEHAVIOURS - 1) % N_WRAP_BEHAVIOURS;
+				setWrapBehaviour((getWrapBehaviour() + N_WRAP_BEHAVIOURS - 1) % N_WRAP_BEHAVIOURS);
 				syncShaderUniforms();
-				showInfo(`${WRAP_BEHAVIOURS[wrapBehaviour]}`);
+				showInfo(`${WRAP_BEHAVIOURS[getWrapBehaviour()]}`);
 			}),
 			KeyV: syncUrl(() => {
-				setPaletteOffset(paletteOffset + 1);
-				showInfo(`Palette offset: ${paletteOffset}`);
+				if (setPaletteOffset(getPaletteOffset() + 1) && displayShader)
+					displayShader.updateUniforms({ u_colors: getColorsForUniform() });
+				needsDisplayUpdate = true;
+				showInfo(`Palette offset: ${getPaletteOffset()}`);
 			}),
 			'Shift+KeyV': syncUrl(() => {
-				setPaletteOffset(paletteOffset - 1);
-				showInfo(`Palette offset: ${paletteOffset}`);
+				if (setPaletteOffset(getPaletteOffset() - 1) && displayShader)
+					displayShader.updateUniforms({ u_colors: getColorsForUniform() });
+				needsDisplayUpdate = true;
+				showInfo(`Palette offset: ${getPaletteOffset()}`);
 			}),
 			KeyQ: syncUrl(() => {
+				const neighborRange = getNeighborRange();
 				const next = Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1);
 				if (next !== neighborRange) setNeighborRange(next, true);
-				showInfo(`Neighbor range: ${neighborRange}`);
+				showInfo(`Neighbor range: ${getNeighborRange()}`);
 			}),
 			'Shift+KeyQ': syncUrl(() => {
+				const neighborRange = getNeighborRange();
 				const next = Math.max(neighborRange - 1, 1);
 				if (next !== neighborRange) setNeighborRange(next, true);
-				showInfo(`Neighbor range: ${neighborRange}`);
+				showInfo(`Neighbor range: ${getNeighborRange()}`);
 			}),
 			KeyE: syncUrl(() => {
+				const cellInertia = getCellInertia();
 				const next = Math.min(1, cellInertia + 0.05);
 				if (next !== cellInertia) {
-					cellInertia = next;
+					setCellInertia(next);
 				}
-				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
+				showInfo(`Cell inertia: ${Math.round(getCellInertia() * 100)}%`);
 			}),
 			'Shift+KeyE': syncUrl(() => {
+				const cellInertia = getCellInertia();
 				const next = Math.max(0, cellInertia - 0.05);
 				if (next !== cellInertia) {
-					cellInertia = next;
+					setCellInertia(next);
 				}
-				showInfo(`Cell inertia: ${Math.round(cellInertia * 100)}%`);
+				showInfo(`Cell inertia: ${Math.round(getCellInertia() * 100)}%`);
 			}),
 			KeyZ: syncUrl(() => {
+				const nStates = getNStates();
 				const next = Math.min(MAX_N_STATES, nStates + 1);
 				if (next !== nStates) {
-					nStates = next;
+					setNStates(next);
 					updateUniformsKeepRuleset();
 					scramble();
 				}
-				showInfo(`States: ${nStates}`);
+				showInfo(`States: ${getNStates()}`);
 			}),
 			'Shift+KeyZ': syncUrl(() => {
+				const nStates = getNStates();
 				const next = Math.max(MIN_N_STATES, nStates - 1);
 				if (next !== nStates) {
-					nStates = next;
+					setNStates(next);
 					updateUniformsKeepRuleset();
 					scramble();
 				}
-				showInfo(`States: ${nStates}`);
+				showInfo(`States: ${getNStates()}`);
 			}),
 			KeyX: syncUrl(() => {
-				neighborhoodType = (neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES;
+				const neighborhoodType = getNeighborhoodType();
+				setNeighborhoodType((neighborhoodType + 1) % N_NEIGHBORHOOD_TYPES);
 				updateUniformsKeepRuleset();
-				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
+				showInfo(`${NEIGHBORHOOD_TYPES[getNeighborhoodType()]} Neighborhood`);
 			}),
 			'Shift+KeyX': syncUrl(() => {
-				neighborhoodType = (neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES;
+				const neighborhoodType = getNeighborhoodType();
+				setNeighborhoodType((neighborhoodType + N_NEIGHBORHOOD_TYPES - 1) % N_NEIGHBORHOOD_TYPES);
 				updateUniformsKeepRuleset();
-				showInfo(`${NEIGHBORHOOD_TYPES[neighborhoodType]} Neighborhood`);
+				showInfo(`${NEIGHBORHOOD_TYPES[getNeighborhoodType()]} Neighborhood`);
 			}),
 			KeyA: syncUrl(() => {
+				const nRings = getNRings();
 				const next = Math.min(MAX_N_RINGS, nRings + 1);
 				if (next !== nRings) {
-					nRings = next;
-					const minRange = nRings * 2;
-					if (neighborRange < minRange) {
-						neighborRange = Math.min(MAX_NEIGHBOR_RANGE, minRange);
+					setNRings(next);
+					const minRange = next * 2;
+					if (getNeighborRange() < minRange) {
+						setNeighborRangeValue(Math.min(MAX_NEIGHBOR_RANGE, minRange));
 					}
 					updateUniformsKeepRuleset();
 					scramble();
 				}
-				showInfo(`Neighborhood rings: ${nRings}`);
+				showInfo(`Weight rings: ${getNRings()}`);
 			}),
 			'Shift+KeyA': syncUrl(() => {
-				const next = Math.max(MIN_N_RINGS, nRings - 1);
+				const nRings = getNRings();
+				const next = Math.max(1, nRings - 1);
 				if (next !== nRings) {
-					nRings = next;
+					setNRings(next);
 					updateUniformsKeepRuleset();
 					scramble();
 				}
-				showInfo(`Neighborhood rings: ${nRings}`);
+				showInfo(`Weight rings: ${getNRings()}`);
 			}),
-			KeyW: syncUrl(() => {
-				showInfo(`Weights: ${updateWeights()}`);
-			}),
-			'Shift+KeyW': syncUrl(() => {
-				showInfo(`Weights: ${updateWeights(-1)}`);
-			}),
+		KeyW: syncUrl(() => {
+			showInfo(`Weights: ${updateWeights()}`);
+			updateUniformsKeepRuleset();
+		}),
+		'Shift+KeyW': syncUrl(() => {
+			showInfo(`Weights: ${updateWeights(-1)}`);
+			updateUniformsKeepRuleset();
+		}),
 			ArrowRight: syncUrl(e => {
 				e.preventDefault();
 				if (redoRulesetChange()) {
@@ -240,7 +289,11 @@ tinykeys(window, {
 			'Shift+BracketRight': () => changeBank(-1),
 			BracketLeft: () => changeBank(-1),
 			'Shift+BracketLeft': () => changeBank(1),
-			'Shift+?': () => instructionsContainer.classList.toggle('show'),
+			'Shift+?': () => {
+				instructionsContainer.classList.add('show');
+				instructionsView?.classList.remove('hide');
+				explainView?.classList.add('hide');
+			},
 		}).map(([key, cb]) => [key, ifInstructionsHidden(cb)]),
 	),
 	Escape: () => instructionsContainer.classList.remove('show'),
@@ -275,56 +328,8 @@ const R8UI_OPTIONS = {
 
 let updateShader;
 let displayShader;
-let nStates = 8;
-let cellInertia = 0.8;
-let isSemitotalistic = false;
-const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp', 'Brick', 'Stair'];
-const N_WRAP_BEHAVIOURS = WRAP_BEHAVIOURS.length;
-let wrapBehaviour = 0;
-const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard'];
-const N_NEIGHBORHOOD_TYPES = NEIGHBORHOOD_TYPES.length;
-let neighborhoodType = 0;
-let neighborRange;
-let minNeighborWeight;
-let nRings = 2;
 let resolutionMultiplier = 0.25;
 let isPaused = false;
-
-const weights = new Float32Array(MAX_N_STATES);
-const rulesByState = new Uint8Array(MAX_N_STATES * MAX_N_RULES);
-let colors = new Float32Array(MAX_N_STATES * 3);
-let currentPaletteId = paletteIds[0];
-let paletteOrderIdx = 0;
-let nextWeightsIdx = 0;
-let paletteOffset = 0;
-
-const ringInnerRadii = new Float32Array(MAX_N_RINGS);
-const ringOuterRadii = new Float32Array(MAX_N_RINGS);
-const ringWeights = new Float32Array(MAX_N_RINGS);
-
-function generateRings() {
-	if (nRings === 1) {
-		ringInnerRadii[0] = 1;
-		ringOuterRadii[0] = neighborRange;
-		ringWeights[0] = 1.0;
-	} else {
-		const maxR = neighborRange;
-		const step = maxR / nRings;
-		for (let i = 0; i < nRings; i++) {
-			const base = Math.floor(i * step);
-			ringInnerRadii[i] = Math.max(1, base + 1);
-			ringOuterRadii[i] = Math.max(ringInnerRadii[i], Math.floor((i + 1) * step));
-		}
-		for (let i = 0; i < nRings; i++) {
-			ringWeights[i] = i % 2 === 0 ? 1.0 : -0.5;
-		}
-	}
-	for (let i = nRings; i < MAX_N_RINGS; i++) {
-		ringInnerRadii[i] = 0;
-		ringOuterRadii[i] = 0;
-		ringWeights[i] = 0;
-	}
-}
 
 const rulesetHistory = [];
 
@@ -332,32 +337,9 @@ function getRandomTextureData(width, height) {
 	const size = width * height;
 	const data = new Uint8Array(size);
 	for (let i = 0; i < size; ++i) {
-		data[i] = Math.floor(Math.random() * nStates);
+		data[i] = Math.floor(Math.random() * getNStates());
 	}
 	return data;
-}
-
-function getRulesetStart(stateIndex) {
-	return stateIndex * MAX_N_RULES;
-}
-
-function getRuleset(ruleCount, stateIndex) {
-	const start = getRulesetStart(stateIndex);
-	return rulesByState.subarray(start, start + ruleCount);
-}
-
-function setRuleset(ruleCount, stateIndex, values) {
-	const start = getRulesetStart(stateIndex);
-	rulesByState.set(values.subarray(0, ruleCount), start);
-}
-
-function createRandomRuleset(ruleCount) {
-	const newRules = Array.from({ length: ruleCount }, (_, i) => {
-		if (i < nStates && cellInertia < 1) return i + 1;
-		return Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
-	});
-	shuffleArray(newRules);
-	return new Uint8Array(newRules);
 }
 
 function createShaders() {
@@ -383,6 +365,7 @@ uniform int u_maxNeighborRange;
 uniform int u_neighborhoodType;
 uniform int u_wrapBehaviour;
 uniform int u_nRings;
+uniform int u_euclideanRings;
 uniform float u_ringInner[${MAX_N_RINGS}];
 uniform float u_ringOuter[${MAX_N_RINGS}];
 uniform float u_ringWeights[${MAX_N_RINGS}];
@@ -448,6 +431,7 @@ void main() {
 		int iOuter = int(outerR);
 		float innerR2 = innerR * innerR;
 		float outerR2 = outerR * outerR;
+		int iInner = int(innerR);
 
 		float ringSum = 0.0;
 		for (int dx = -${MAX_NEIGHBOR_RANGE}; dx <= ${MAX_NEIGHBOR_RANGE}; dx++) {
@@ -455,12 +439,17 @@ void main() {
 			for (int dy = -${MAX_NEIGHBOR_RANGE}; dy <= ${MAX_NEIGHBOR_RANGE}; dy++) {
 				if (dy < -iOuter || dy > iOuter) continue;
 				if (dx == 0 && dy == 0) continue;
-				float dist2 = float(dx * dx + dy * dy);
-				if (dist2 < innerR2 || dist2 > outerR2) continue;
-				if (u_neighborhoodType == 1 && (abs(dx) + abs(dy) > iOuter)) continue; // Von Neumann
-				if (u_neighborhoodType == 2 && (dx != 0 && dy != 0)) continue; // Cross
-				if (u_neighborhoodType == 3 && (abs(dx) != abs(dy))) continue; // Star
-				if (u_neighborhoodType == 4 && (((dx + dy) & 1) != 0)) continue; // Checkerboard
+				if (u_euclideanRings == 1 || u_neighborhoodType == 5) {
+					float dist2 = float(dx * dx + dy * dy);
+					if (dist2 < innerR2 || dist2 > outerR2) continue;
+				} else {
+					int cellDistVal = (u_neighborhoodType == 1) ? (abs(dx) + abs(dy)) : max(abs(dx), abs(dy));
+					if (cellDistVal < iInner || cellDistVal > iOuter) continue;
+				}
+				if (u_neighborhoodType == 1 && (abs(dx) + abs(dy) > iOuter)) continue;
+				if (u_neighborhoodType == 2 && (dx != 0 && dy != 0)) continue;
+				if (u_neighborhoodType == 3 && (abs(dx) != abs(dy))) continue;
+				if (u_neighborhoodType == 4 && (((dx + dy) & 1) != 0)) continue;
 
 				ringSum += u_weights[getState(v_uv + vec2(float(dx), float(dy)) * onePixel)];
 			}
@@ -490,23 +479,30 @@ void main() {
 		},
 	);
 	updateShader.initializeTexture('u_seed', { data: seedData, width: w, height: h }, R8UI_OPTIONS);
-	updateShader.initializeUniform('u_weights', 'float', Array.from(weights), { arrayLength: MAX_N_STATES });
+	updateShader.initializeUniform('u_weights', 'float', Array.from(getWeights()), { arrayLength: MAX_N_STATES });
 	updateShader.initializeTexture(
 		'u_rules',
-		{ data: rulesByState, width: MAX_N_RULES, height: MAX_N_STATES },
+		{ data: getRulesByState(), width: MAX_N_RULES, height: MAX_N_STATES },
 		R8UI_OPTIONS,
 	);
-	updateShader.initializeUniform('u_nStates', 'uint', nStates);
+	updateShader.initializeUniform('u_nStates', 'uint', getNStates());
 	updateShader.initializeUniform('u_nRules', 'int', MAX_N_RULES);
-	updateShader.initializeUniform('u_isSemitotalistic', 'int', isSemitotalistic ? 1 : 0);
+	updateShader.initializeUniform('u_isSemitotalistic', 'int', getIsSemitotalistic() ? 1 : 0);
 	updateShader.initializeUniform('u_minNeighborWeight', 'int', 0);
-	updateShader.initializeUniform('u_maxNeighborRange', 'int', neighborRange);
-	updateShader.initializeUniform('u_neighborhoodType', 'int', neighborhoodType);
-	updateShader.initializeUniform('u_wrapBehaviour', 'int', wrapBehaviour);
-	updateShader.initializeUniform('u_nRings', 'int', nRings);
-	updateShader.initializeUniform('u_ringInner', 'float', Array.from(ringInnerRadii), { arrayLength: MAX_N_RINGS });
-	updateShader.initializeUniform('u_ringOuter', 'float', Array.from(ringOuterRadii), { arrayLength: MAX_N_RINGS });
-	updateShader.initializeUniform('u_ringWeights', 'float', Array.from(ringWeights), { arrayLength: MAX_N_RINGS });
+	updateShader.initializeUniform('u_maxNeighborRange', 'int', getNeighborRange());
+	updateShader.initializeUniform('u_neighborhoodType', 'int', getNeighborhoodType());
+	updateShader.initializeUniform('u_wrapBehaviour', 'int', getWrapBehaviour());
+	updateShader.initializeUniform('u_nRings', 'int', getNRings());
+	updateShader.initializeUniform('u_euclideanRings', 'int', getEuclideanRings() ? 1 : 0);
+	updateShader.initializeUniform('u_ringInner', 'float', Array.from(getRingInnerRadii()), {
+		arrayLength: MAX_N_RINGS,
+	});
+	updateShader.initializeUniform('u_ringOuter', 'float', Array.from(getRingOuterRadii()), {
+		arrayLength: MAX_N_RINGS,
+	});
+	updateShader.initializeUniform('u_ringWeights', 'float', Array.from(getRingWeights()), {
+		arrayLength: MAX_N_RINGS,
+	});
 	updateShader.on('updateResolution', (width, height) => {
 		updateShader.reset();
 		updateShader.updateTextures({
@@ -523,35 +519,16 @@ void main() {
 	displayShader.initializeUniform('u_colors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
 }
 
-function getColorsForUniform() {
-	const nColors = rawPalettes[currentPaletteId].length;
-	return Array.from({ length: MAX_N_STATES }, (_, i) => {
-		const sourceState = (i + paletteOffset) % nColors;
-		const sourceIndex = sourceState * 3;
-		return [colors[sourceIndex], colors[sourceIndex + 1], colors[sourceIndex + 2]];
-	});
-}
-
-function setPaletteOffset(nextOffset) {
-	const nColors = rawPalettes[currentPaletteId].length;
-	const normalizedOffset = ((nextOffset % nColors) + nColors) % nColors;
-	if (paletteOffset === normalizedOffset) return false;
-	paletteOffset = normalizedOffset;
-	if (displayShader) {
-		displayShader.updateUniforms({ u_colors: getColorsForUniform() });
-	}
-	needsDisplayUpdate = true;
-	return true;
-}
-
-function resetPaletteOffset() {
-	return setPaletteOffset(0);
-}
-
 const MAX_RULESET_HISTORY = 128;
 let rulesetHistoryIndex = -1;
 
 function createRulesetHistoryEntry() {
+	const weights = getWeights();
+	const nStates = getNStates();
+	const nRings = getNRings();
+	const ringInner = getRingInnerRadii();
+	const ringOuter = getRingOuterRadii();
+	const ringWeights = getRingWeights();
 	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
 		(acc, weight) => {
 			if (weight < acc.minWeight) acc.minWeight = weight;
@@ -562,11 +539,11 @@ function createRulesetHistoryEntry() {
 	);
 	let totalMaxSum = 0;
 	for (let i = 0; i < nRings; i++) {
-		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
-		const rw = ringWeights[i];
-		totalMaxSum += (rw >= 0 ? maxWeight : minWeight) * cells * Math.abs(rw);
+		const cells = countCellsInRing(ringInner[i], ringOuter[i]);
+		const ringWeight = ringWeights[i];
+		totalMaxSum += (ringWeight >= 0 ? maxWeight : minWeight) * cells * Math.abs(ringWeight);
 	}
-	const nRulesNeeded = Math.floor(totalMaxSum) - minNeighborWeight + 1;
+	const nRulesNeeded = Math.floor(totalMaxSum) - getMinNeighborWeight() + 1;
 	if (nRulesNeeded < 1) return null;
 	const ruleCount = Math.min(nRulesNeeded, MAX_N_RULES);
 	const rulesSnapshot = new Uint8Array(MAX_N_STATES * ruleCount);
@@ -576,19 +553,19 @@ function createRulesetHistoryEntry() {
 	return {
 		rulesByState: rulesSnapshot,
 		ruleCount,
-		minNeighborWeight,
+		minNeighborWeight: getMinNeighborWeight(),
 	};
 }
 
 function applyRulesetHistoryEntry(entry) {
-	rulesByState.fill(0);
+	getRulesByState().fill(0);
 	const statesToRestore = Math.min(MAX_N_STATES, Math.floor(entry.rulesByState.length / entry.ruleCount));
 	for (let stateIndex = 0; stateIndex < statesToRestore; stateIndex++) {
 		const srcStart = stateIndex * entry.ruleCount;
 		const srcEnd = srcStart + entry.ruleCount;
 		setRuleset(entry.ruleCount, stateIndex, entry.rulesByState.subarray(srcStart, srcEnd));
 	}
-	minNeighborWeight = entry.minNeighborWeight;
+	setMinNeighborWeight(entry.minNeighborWeight);
 	applyRulesToShader(entry.ruleCount);
 	syncUrlFromState();
 }
@@ -631,12 +608,12 @@ function redoRulesetChange() {
 function applyRulesToShader(ruleCount) {
 	if (updateShader) {
 		updateShader.updateTextures({
-			u_rules: { data: rulesByState, width: MAX_N_RULES, height: MAX_N_STATES },
+			u_rules: { data: getRulesByState(), width: MAX_N_RULES, height: MAX_N_STATES },
 		});
 		updateShader.updateUniforms({
 			u_nRules: ruleCount,
-			u_isSemitotalistic: isSemitotalistic ? 1 : 0,
-			u_minNeighborWeight: minNeighborWeight,
+			u_isSemitotalistic: getIsSemitotalistic() ? 1 : 0,
+			u_minNeighborWeight: getMinNeighborWeight(),
 		});
 	}
 }
@@ -644,7 +621,7 @@ function applyRulesToShader(ruleCount) {
 function generateNewRuleset() {
 	const ruleCount = getCurrentRuleCount();
 	if (ruleCount < 1) return false;
-	rulesByState.fill(0);
+	getRulesByState().fill(0);
 	for (let stateIndex = 0; stateIndex < MAX_N_STATES; stateIndex++) {
 		setRuleset(ruleCount, stateIndex, createRandomRuleset(ruleCount));
 	}
@@ -652,109 +629,41 @@ function generateNewRuleset() {
 	return true;
 }
 
-function getCurrentRuleCount() {
-	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
-		(acc, weight) => {
-			if (weight < acc.minWeight) acc.minWeight = weight;
-			if (weight > acc.maxWeight) acc.maxWeight = weight;
-			return acc;
-		},
-		{ minWeight: Infinity, maxWeight: -Infinity },
-	);
-	let totalMaxSum = 0;
-	for (let i = 0; i < nRings; i++) {
-		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
-		const rw = ringWeights[i];
-		totalMaxSum += (rw >= 0 ? maxWeight : minWeight) * cells * Math.abs(rw);
-	}
-	const nRulesNeeded = Math.floor(totalMaxSum) - minNeighborWeight + 1;
-	return Math.min(Math.max(nRulesNeeded, 1), MAX_N_RULES);
-}
-
 function mutateRuleset() {
 	const ruleCount = getCurrentRuleCount();
 	if (ruleCount < 1) return false;
-	if (isSemitotalistic) {
-		const targetState = Math.floor(Math.random() * nStates);
+	if (getIsSemitotalistic()) {
+		const targetState = Math.floor(Math.random() * getNStates());
 		setRuleset(ruleCount, targetState, createRandomRuleset(ruleCount));
 	} else {
+		const rules = getRulesByState();
 		const i = Math.floor(Math.random() * ruleCount);
-		rulesByState[i] = Math.random() < cellInertia ? 0 : Math.floor(Math.random() * (nStates + 1));
+		rules[i] = Math.random() < getCellInertia() ? 0 : Math.floor(Math.random() * (getNStates() + 1));
 	}
 	applyRulesToShader(ruleCount);
 	return true;
-}
-
-function countCellsInRing(innerR, outerR) {
-	let count = 0;
-	const iOuter = Math.floor(outerR);
-	for (let dx = -iOuter; dx <= iOuter; dx++) {
-		for (let dy = -iOuter; dy <= iOuter; dy++) {
-			if (dx === 0 && dy === 0) continue;
-			const dist = Math.sqrt(dx * dx + dy * dy);
-			if (dist < innerR || dist > outerR) continue;
-			if (neighborhoodType === 1 && Math.abs(dx) + Math.abs(dy) > iOuter) continue;
-			if (neighborhoodType === 2 && dx !== 0 && dy !== 0) continue;
-			if (neighborhoodType === 3 && Math.abs(dx) !== Math.abs(dy)) continue;
-			if (neighborhoodType === 4 && ((dx + dy) & 1) !== 0) continue;
-			count++;
-		}
-	}
-	return count;
-}
-
-function recalcMinNeighborWeight() {
-	generateRings();
-
-	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
-		(acc, weight) => {
-			if (weight < acc.minWeight) acc.minWeight = weight;
-			if (weight > acc.maxWeight) acc.maxWeight = weight;
-			return acc;
-		},
-		{ minWeight: Infinity, maxWeight: -Infinity },
-	);
-	let totalMinSum = 0;
-	let totalMaxSum = 0;
-	for (let i = 0; i < nRings; i++) {
-		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
-		const rw = ringWeights[i];
-		if (rw >= 0) {
-			totalMinSum += minWeight * cells * rw;
-			totalMaxSum += maxWeight * cells * rw;
-		} else {
-			totalMinSum += maxWeight * cells * rw;
-			totalMaxSum += minWeight * cells * rw;
-		}
-	}
-	minNeighborWeight = Math.floor(totalMinSum);
-	const maxNeighborWeight = Math.floor(totalMaxSum);
-	const nRulesNeeded = maxNeighborWeight - minNeighborWeight + 1;
-	if (nRulesNeeded > MAX_N_RULES || nRulesNeeded < 1) {
-		console.error('Too many rules:', nRulesNeeded, weights);
-		showError();
-	}
 }
 
 function syncShaderUniforms() {
 	if (!updateShader) return;
 	const ruleCount = getCurrentRuleCount();
 	updateShader.updateTextures({
-		u_rules: { data: rulesByState, width: MAX_N_RULES, height: MAX_N_STATES },
+		u_rules: { data: getRulesByState(), width: MAX_N_RULES, height: MAX_N_STATES },
 	});
 	updateShader.updateUniforms({
-		u_weights: Array.from(weights),
-		u_nStates: nStates,
+		u_weights: Array.from(getWeights()),
+		u_nStates: getNStates(),
 		u_nRules: ruleCount,
-		u_isSemitotalistic: isSemitotalistic ? 1 : 0,
-		u_minNeighborWeight: minNeighborWeight,
-		u_maxNeighborRange: neighborRange,
-		u_neighborhoodType: neighborhoodType,
-		u_wrapBehaviour: wrapBehaviour,
-		u_nRings: nRings,
-		u_ringInner: Array.from(ringInnerRadii),
-		u_ringOuter: Array.from(ringOuterRadii),
-		u_ringWeights: Array.from(ringWeights),
+		u_isSemitotalistic: getIsSemitotalistic() ? 1 : 0,
+		u_minNeighborWeight: getMinNeighborWeight(),
+		u_maxNeighborRange: getNeighborRange(),
+		u_neighborhoodType: getNeighborhoodType(),
+		u_wrapBehaviour: getWrapBehaviour(),
+		u_nRings: getNRings(),
+		u_euclideanRings: getEuclideanRings() ? 1 : 0,
+		u_ringInner: Array.from(getRingInnerRadii()),
+		u_ringOuter: Array.from(getRingOuterRadii()),
+		u_ringWeights: Array.from(getRingWeights()),
 	});
 }
 
@@ -802,7 +711,7 @@ function applySlot(n) {
 	const key = memoryKey(currentBank, n);
 	const encoded = memory[key];
 	if (!encoded) return;
-	restoreStateFromUrl(encoded);
+	restoreStateFromUrl(encoded, applyAfterUnpack);
 }
 
 function changeBank(direction) {
@@ -823,12 +732,12 @@ window.addEventListener(
 	'keydown',
 	ifInstructionsHidden(({ key, repeat }) => {
 		if (repeat || key < '0' || key > '9') return;
-		const n = parseInt(key, 10);
+		const slot = parseInt(key, 10);
 		clearTimeout(slotHoldTimer);
-		slotHoldN = n;
+		slotHoldN = slot;
 		slotHoldTimer = setTimeout(() => {
 			slotHoldN = null;
-			saveToSlot(n);
+			saveToSlot(slot);
 		}, SLOT_HOLD_MS);
 	}),
 );
@@ -837,155 +746,14 @@ window.addEventListener(
 	'keyup',
 	ifInstructionsHidden(({ key }) => {
 		if (key < '0' || key > '9') return;
-		const n = parseInt(key, 10);
-		if (slotHoldN !== n) return;
+		const slot = parseInt(key, 10);
+		if (slotHoldN !== slot) return;
 		clearTimeout(slotHoldTimer);
 		slotHoldN = null;
-		applySlot(n);
+		applySlot(slot);
 		syncUrlFromState();
 	}),
 );
-
-const STATE_VERSION = 4;
-const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4];
-const WEIGHT_SCALE = 255 / MAX_WEIGHT;
-
-function packState() {
-	const ruleCount = getCurrentRuleCount();
-	if (ruleCount < 1) return null;
-	const storedRulesetCount = isSemitotalistic ? nStates : 1;
-	const rulesByteLength = storedRulesetCount * ruleCount;
-	const n = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 3 + 2 + 2 + rulesByteLength + nStates;
-	const buf = new Uint8Array(n);
-	const dv = new DataView(buf.buffer);
-	let off = 0;
-	buf[off++] = STATE_VERSION;
-	buf[off++] = nStates;
-	buf[off++] = neighborRange;
-	buf[off++] = nRings;
-	buf[off++] = Math.round(cellInertia * 255);
-	buf[off++] =
-		(neighborhoodType & 0x07) |
-		((nextWeightsIdx & 0x03) << 3) |
-		(isSemitotalistic ? 0x20 : 0) |
-		((wrapBehaviour & 0x03) << 6);
-	const po = Math.min(MAX_N_STATES - 1, Math.max(0, paletteOffset));
-	buf[off++] = (po & 31) | ((wrapBehaviour >> 2) << 5);
-	for (let i = 0; i < 3; i++) buf[off++] = currentPaletteId.charCodeAt(i);
-	dv.setInt16(off, minNeighborWeight, true);
-	off += 2;
-	dv.setUint16(off, ruleCount, true);
-	off += 2;
-	for (let stateIndex = 0; stateIndex < storedRulesetCount; stateIndex++) {
-		const ruleset = getRuleset(ruleCount, stateIndex);
-		for (let i = 0; i < ruleCount; i++) buf[off++] = ruleset[i];
-	}
-	for (let i = 0; i < nStates; i++) buf[off++] = Math.min(255, Math.round(weights[i] * WEIGHT_SCALE));
-	return buf;
-}
-
-function unpackState(buf) {
-	if (!buf || buf.length < 13) return false;
-	const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-	let off = 0;
-	const version = buf[off++];
-	if (!SUPPORTED_STATE_VERSIONS.includes(version)) return false;
-
-	const newNStates = buf[off++];
-	const newNeighborRange = buf[off++];
-	const newNRings = buf[off++];
-	const newCellInertia = buf[off++] / 255;
-	const flags = buf[off++];
-	let newNeighborhoodType, newNextWeightsIdx, newIsSemitotalistic, newWrapBehaviour;
-	if (version === 1) {
-		newNeighborhoodType = (flags & 1) !== 0 ? 1 : 0;
-		newNextWeightsIdx = (flags >> 1) & 3;
-		newIsSemitotalistic = false;
-		newWrapBehaviour = 0;
-	} else {
-		newNeighborhoodType = flags & 0x07;
-		newNextWeightsIdx = (flags >> 3) & 3;
-		newIsSemitotalistic = version >= 3 ? (flags & 0x20) !== 0 : false;
-		newWrapBehaviour = version >= 3 ? (flags >> 6) & 0x03 : 0;
-	}
-	if (newNStates < MIN_N_STATES || newNStates > MAX_N_STATES) return false;
-
-	let newPaletteOffset = 0;
-	let newPaletteId;
-	let newMinNeighborWeight;
-	let ruleCount;
-	if (version >= 3) {
-		if (off + 8 > buf.length) return false;
-		const paletteByte = buf[off++];
-		newPaletteOffset = version >= 4 ? paletteByte & 31 : paletteByte;
-		if (version >= 4) newWrapBehaviour |= (paletteByte >> 5) << 2;
-		if (newPaletteOffset >= MAX_N_STATES) return false;
-		newPaletteId = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2]);
-		off += 3;
-		newMinNeighborWeight = dv.getInt16(off, true);
-		off += 2;
-		ruleCount = dv.getUint16(off, true);
-		off += 2;
-		if (ruleCount < 1 || ruleCount > MAX_N_RULES) return false;
-	} else {
-		newPaletteId = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2]);
-		off += 3;
-		newMinNeighborWeight = dv.getInt16(off, true);
-		off += 2;
-		ruleCount = dv.getUint16(off, true);
-		off += 2;
-		if (ruleCount < 1 || ruleCount > MAX_N_RULES) return false;
-	}
-
-	const expectedRulesLength = version >= 3 ? (newIsSemitotalistic ? newNStates : 1) * ruleCount : ruleCount;
-	if (buf.length < off + expectedRulesLength + newNStates) return false;
-
-	nStates = newNStates;
-	neighborRange = newNeighborRange;
-	nRings = newNRings;
-	cellInertia = newCellInertia;
-	neighborhoodType = newNeighborhoodType;
-	nextWeightsIdx = newNextWeightsIdx;
-	isSemitotalistic = newIsSemitotalistic;
-	wrapBehaviour = newWrapBehaviour < N_WRAP_BEHAVIOURS ? newWrapBehaviour : 0;
-	currentPaletteId = newPaletteId in rawPalettes ? newPaletteId : paletteIds[0];
-	paletteOrderIdx = paletteIds.indexOf(currentPaletteId);
-	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
-	const nColors = rawPalettes[currentPaletteId].length;
-	paletteOffset = ((newPaletteOffset % nColors) + nColors) % nColors;
-	minNeighborWeight = newMinNeighborWeight;
-
-	rulesByState.fill(0);
-	if (version >= 3) {
-		if (isSemitotalistic) {
-			for (let stateIndex = 0; stateIndex < nStates; stateIndex++) {
-				setRuleset(ruleCount, stateIndex, buf.subarray(off, off + ruleCount));
-				off += ruleCount;
-			}
-		} else {
-			const sharedRuleset = buf.subarray(off, off + ruleCount);
-			off += ruleCount;
-			for (let stateIndex = 0; stateIndex < nStates; stateIndex++) {
-				setRuleset(ruleCount, stateIndex, sharedRuleset);
-			}
-		}
-	} else {
-		const sharedRuleset = buf.subarray(off, off + ruleCount);
-		off += ruleCount;
-		for (let stateIndex = 0; stateIndex < nStates; stateIndex++) {
-			setRuleset(ruleCount, stateIndex, sharedRuleset);
-		}
-	}
-	for (let i = 0; i < nStates; i++) weights[i] = buf[off++] / WEIGHT_SCALE;
-
-	return { ruleCount };
-}
-
-function encodeState() {
-	const buf = packState();
-	if (!buf) return null;
-	return compressToUrl(buf);
-}
 
 function syncUrlFromState() {
 	const encoded = encodeState();
@@ -997,56 +765,35 @@ function syncUrlFromState() {
 	return encoded;
 }
 
-function restoreStateFromUrl(encoded) {
-	try {
-		const buf = decompressFromUrl(encoded);
-		const result = unpackState(buf);
-		if (!result) return false;
-
-		generateRings();
-		const palette = rawPalettes[currentPaletteId] || rawPalettes[paletteIds[0]];
-		const normalizedPalette = palette.map(hexToNormalizedRGB);
-		for (let i = 0; i < MAX_N_STATES; ++i) {
-			const rgbComponents = [...normalizedPalette[i % normalizedPalette.length]];
-			if (i >= normalizedPalette.length) {
-				for (let j = 0; j < rgbComponents.length; ++j) {
-					rgbComponents[j] = Math.max(0, Math.min(1, rgbComponents[j] + Math.random() * 0.1 - 0.05));
-				}
-			}
-			const rIdx = i * 3;
-			colors[rIdx] = rgbComponents[0];
-			colors[rIdx + 1] = rgbComponents[1];
-			colors[rIdx + 2] = rgbComponents[2];
-		}
-
-		if (updateShader) {
-			syncShaderUniforms();
-			applyRulesToShader(result.ruleCount);
-		}
-		if (displayShader) {
-			displayShader.updateUniforms({ u_colors: getColorsForUniform() });
-		}
-		resetRulesetHistory();
-		needsDisplayUpdate = true;
-		return true;
-	} catch {
-		return false;
+function applyAfterUnpack(ruleCount) {
+	generateRingRadii();
+	applyColorsFromPalette();
+	if (updateShader) {
+		syncShaderUniforms();
+		applyRulesToShader(ruleCount);
 	}
+	if (displayShader) {
+		displayShader.updateUniforms({ u_colors: getColorsForUniform() });
+	}
+	resetRulesetHistory();
+	needsDisplayUpdate = true;
 }
 
 function updateUniforms() {
-	recalcMinNeighborWeight();
-	generateNewRuleset();
-	syncShaderUniforms();
+	if (!recalcMinNeighborWeight()) showError();
+	else {
+		generateNewRuleset();
+		syncShaderUniforms();
+	}
 }
 
 function updateUniformsKeepRuleset() {
-	recalcMinNeighborWeight();
-	syncShaderUniforms();
+	if (!recalcMinNeighborWeight()) showError();
+	else syncShaderUniforms();
 }
 
 function setNeighborRange(newNeighborRange, keepRuleset = false) {
-	neighborRange = newNeighborRange;
+	setNeighborRangeValue(newNeighborRange);
 	if (keepRuleset) {
 		updateUniformsKeepRuleset();
 	} else {
@@ -1054,52 +801,8 @@ function setNeighborRange(newNeighborRange, keepRuleset = false) {
 	}
 }
 
-const N_WEIGHT_DISTRIBUTIONS = 4;
-function updateWeights(direction = 1) {
-	let returnLabel = '';
-	nextWeightsIdx = (N_WEIGHT_DISTRIBUTIONS + nextWeightsIdx + direction) % N_WEIGHT_DISTRIBUTIONS;
-	switch (nextWeightsIdx) {
-		case 0:
-			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = (i % 2) * MAX_WEIGHT;
-			returnLabel = '0, 1, 0, 1…';
-			break;
-		case 1:
-			weights.set(generateFurthestSubsequentDistanceArray(MAX_N_STATES, [0, MAX_WEIGHT]));
-			returnLabel = '0, 1, ½, ¾…';
-			break;
-		case 2: {
-			const pattern = [0, 0.5, 1, 0.5, 0].map(n => n * MAX_WEIGHT);
-			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = pattern[i % pattern.length];
-			returnLabel = '0, ½, 1, ½, 0…';
-			break;
-		}
-		case 3:
-			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = Math.random() * MAX_WEIGHT;
-			returnLabel = 'random';
-			break;
-	}
-	updateUniformsKeepRuleset();
-	return returnLabel;
-}
-
 function updateColors(direction = 1) {
-	paletteOffset = 0;
-	paletteOrderIdx = (paletteIds.length + paletteOrderIdx + direction) % paletteIds.length;
-	currentPaletteId = paletteIds[paletteOrderIdx];
-	const palette = rawPalettes[currentPaletteId];
-	const normalizedPalette = palette.map(hexToNormalizedRGB);
-	for (let i = 0; i < MAX_N_STATES; ++i) {
-		const rgbComponents = [...normalizedPalette[i % normalizedPalette.length]];
-		if (i >= normalizedPalette.length) {
-			for (let j = 0; j < rgbComponents.length; ++j) {
-				rgbComponents[j] = Math.max(0, Math.min(1, rgbComponents[j] + Math.random() * 0.1 - 0.05));
-			}
-		}
-		const rIdx = i * 3;
-		colors[rIdx] = rgbComponents[0];
-		colors[rIdx + 1] = rgbComponents[1];
-		colors[rIdx + 2] = rgbComponents[2];
-	}
+	updateColorsState(direction);
 	if (displayShader) displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 	needsDisplayUpdate = true;
 }
@@ -1126,14 +829,35 @@ function showInfo(text) {
 	hideInfoTimeout = window.setTimeout(() => infoContainer.classList.remove('show'), 2000);
 }
 
-setNeighborRange(4);
 updateWeights(0);
 updateColors(0);
+setNeighborRange(4);
 
 const instructionsContainer = document.getElementById('instructions');
-instructionsContainer
-	.querySelector('button')
-	.addEventListener('click', () => instructionsContainer.classList.remove('show'));
+const instructionsView = document.querySelector('.instructions-view');
+const explainView = document.querySelector('.explain-view');
+
+instructionsContainer.querySelector('.start-button')?.addEventListener('click', () => {
+	instructionsContainer.classList.remove('show');
+});
+
+document.getElementById('explain-ruleset-btn')?.addEventListener('click', () => {
+	const snapshot = getStateSnapshot();
+	if (!snapshot) return;
+	const panel = renderExplainPanel(snapshot);
+	explainView.innerHTML = '';
+	explainView.appendChild(panel);
+	instructionsView?.classList.add('hide');
+	explainView?.classList.remove('hide');
+
+	panel._backBtn?.addEventListener('click', () => {
+		explainView?.classList.add('hide');
+		instructionsView?.classList.remove('hide');
+	});
+	panel._takeLookBtn?.addEventListener('click', () => {
+		instructionsContainer.classList.remove('show');
+	});
+});
 
 function setCanvasSize() {
 	const dpr = window.devicePixelRatio || 1;
@@ -1164,7 +888,7 @@ setupResizeObserver();
 function tryRestoreFromHash() {
 	const hash = location.hash.slice(1);
 	if (hash) {
-		if (restoreStateFromUrl(hash)) {
+		if (restoreStateFromUrl(hash, applyAfterUnpack)) {
 			scramble();
 			return true;
 		}
@@ -1231,7 +955,7 @@ function getOrCreateImageSeedShader() {
 		},
 	);
 	imageSeedShader.initializeUniform('u_paletteColors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
-	imageSeedShader.initializeUniform('u_nStates', 'int', nStates);
+	imageSeedShader.initializeUniform('u_nStates', 'int', getNStates());
 	return imageSeedShader;
 }
 
@@ -1247,7 +971,7 @@ function handleImageDrop(file) {
 		return;
 	}
 
-	if (!restoreStateFromUrl(encoded)) {
+	if (!restoreStateFromUrl(encoded, applyAfterUnpack)) {
 		showError();
 		return;
 	}
@@ -1262,7 +986,7 @@ function handleImageDrop(file) {
 		URL.revokeObjectURL(objectUrl);
 
 		const shader = getOrCreateImageSeedShader();
-		shader.updateUniforms({ u_nStates: nStates });
+		shader.updateUniforms({ u_nStates: getNStates() });
 		shader.updateUniforms({ u_paletteColors: getColorsForUniform() });
 		shader.updateTextures({ u_image: img });
 		shader.draw();

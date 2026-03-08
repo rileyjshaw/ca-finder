@@ -23,15 +23,12 @@ export function repeatArrayToLength(array, length) {
 	return Array.from({ length }, (_, i) => array[i % array.length]);
 }
 
-// Convert a binary fraction to a decimal number.
 export function binaryFractionToDecimal(binaryFraction) {
 	let decimal = 0;
-	// Split the binary string at the decimal point
-	let parts = binaryFraction.split('.');
+	const parts = binaryFraction.split('.');
 	if (parts.length === 2) {
-		let fractionPart = parts[1];
+		const fractionPart = parts[1];
 		for (let i = 0; i < fractionPart.length; i++) {
-			// For each digit after the decimal, convert and sum up
 			decimal += parseInt(fractionPart[i]) * Math.pow(2, -(i + 1));
 		}
 	}
@@ -60,7 +57,7 @@ export function generateFurthestSubsequentDistanceArray(length, bounds = [0, 1])
 	return array;
 }
 
-import { deflateSync, inflateSync } from 'fflate';
+import { deflateSync, inflateSync, unzlibSync } from 'fflate';
 
 // Base64url: URL and filename safe, 6 bits per char, no padding.
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -109,5 +106,13 @@ export function compressToUrl(bytes) {
 
 export function decompressFromUrl(str) {
 	const compressed = fromBase64url(str);
-	return inflateSync(compressed);
+	try {
+		return inflateSync(compressed);
+	} catch (e) {
+		try {
+			return unzlibSync(compressed);
+		} catch {
+			throw e;
+		}
+	}
 }
