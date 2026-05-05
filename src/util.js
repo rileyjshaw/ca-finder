@@ -1,3 +1,10 @@
+import { deflateSync, inflateSync, unzlibSync } from 'fflate';
+
+// Base64url: URL and filename safe, 6 bits per char, no padding.
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const B64_LOOKUP = new Uint8Array(128);
+for (let i = 0; i < B64_CHARS.length; i++) B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
+
 export function hexToNormalizedRGB(hex) {
 	if (hex.startsWith('#')) {
 		hex = hex.substring(1);
@@ -56,13 +63,6 @@ export function generateFurthestSubsequentDistanceArray(length, bounds = [0, 1])
 
 	return array;
 }
-
-import { deflateSync, inflateSync, unzlibSync } from 'fflate';
-
-// Base64url: URL and filename safe, 6 bits per char, no padding.
-const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-const B64_LOOKUP = new Uint8Array(128);
-for (let i = 0; i < B64_CHARS.length; i++) B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
 
 function toBase64url(bytes) {
 	let result = '';

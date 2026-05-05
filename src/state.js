@@ -13,7 +13,6 @@ import {
 } from './util.js';
 
 // Configurable.
-export const MAX_WEIGHT = 1.5;
 export const MIN_N_STATES = 2;
 export const MAX_N_STATES = 32;
 export const MAX_NEIGHBOR_RANGE = 12;
@@ -21,8 +20,10 @@ export const MIN_N_RINGS = 1;
 export const MAX_N_RINGS = 8;
 
 // Derived.
+const LEGACY_MAX_WEIGHT = 1.5;
 const MAX_CELLS_PER_RING = Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2);
-export const MAX_N_RULES = Math.floor(MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
+export const MAX_NEIGHBOR_CELLS = MAX_CELLS_PER_RING - 1;
+export const MAX_N_RULES = Math.floor(LEGACY_MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
 export const MAX_ENCODED_STATE_LENGTH = 240;
 
 export const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp', 'Brick', 'Stair'];
@@ -30,9 +31,9 @@ export const N_WRAP_BEHAVIOURS = WRAP_BEHAVIOURS.length;
 export const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard', 'Euclid'];
 export const N_NEIGHBORHOOD_TYPES = NEIGHBORHOOD_TYPES.length;
 
-const STATE_VERSION = 6;
-const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4, 5, 6];
-const WEIGHT_SCALE = 255 / MAX_WEIGHT;
+const STATE_VERSION = 7;
+const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4, 5, 6, 7];
+const WEIGHT_SCALE = 255 / LEGACY_MAX_WEIGHT;
 
 // State variables (module-level; mutated by unpack/setters).
 let nStates = 8;
@@ -45,6 +46,11 @@ let minNeighborWeight = 0;
 let nRings = 2;
 const weights = new Float32Array(MAX_N_STATES);
 const rulesByState = new Uint8Array(MAX_N_STATES * MAX_N_RULES);
+const inactiveRulesByState = new Uint8Array(MAX_N_STATES * MAX_N_RULES);
+let inactiveMinNeighborWeight = 0;
+let ruleCountOverride = null;
+let inactiveRuleCountOverride = null;
+let inactiveRulesPopulated = false;
 let colors = new Float32Array(MAX_N_STATES * 3);
 let currentPaletteId = paletteIds[0];
 let paletteOrderIdx = 0;
@@ -54,12 +60,64 @@ const ringInnerRadii = new Float32Array(MAX_N_RINGS);
 const ringOuterRadii = new Float32Array(MAX_N_RINGS);
 const ringWeights = new Float32Array(MAX_N_RINGS);
 let euclideanRings = false;
+let transitionType = 0;
+export const TRANSITION_TYPES = ['Exact sum', 'Sum order'];
+export const RING_WEIGHT_PRESETS = [
+	{ label: 'Halving', fn: (i) => 1 / Math.pow(2, i) },
+	{ label: 'Equal', fn: () => 1 },
+	{ label: 'Alternating', fn: (i) => (i % 2 === 0 ? 1.0 : -0.5) },
+	{ label: 'Inverse', fn: (i, n) => 1 / Math.pow(2, n - 1 - i) },
+	{ label: 'Fade out', fn: (i, n) => (n <= 1 ? 1 : 1 - i / (n - 1)) },
+];
+let ringWeightPresetIdx = 0;
 
 export function getEuclideanRings() {
 	return euclideanRings;
 }
 export function setEuclideanRings(v) {
 	euclideanRings = !!v;
+}
+export function getTransitionType() {
+	return transitionType;
+}
+export function getRuleCountOverride() {
+	return ruleCountOverride;
+}
+export function restoreRuleCountOverride(v) {
+	ruleCountOverride = v;
+}
+export function clearRuleCountOverride() {
+	ruleCountOverride = null;
+}
+export function getInactiveRulesPopulated() {
+	return inactiveRulesPopulated;
+}
+export function swapTransitionType() {
+	const temp = new Uint8Array(rulesByState);
+	const tempMin = minNeighborWeight;
+	const tempRuleCount = ruleCountOverride;
+	rulesByState.set(inactiveRulesByState);
+	minNeighborWeight = inactiveMinNeighborWeight;
+	ruleCountOverride = inactiveRuleCountOverride;
+	inactiveRulesByState.set(temp);
+	inactiveMinNeighborWeight = tempMin;
+	inactiveRuleCountOverride = tempRuleCount;
+	const wasPopulated = inactiveRulesPopulated;
+	inactiveRulesPopulated = true;
+	transitionType = (transitionType + 1) % TRANSITION_TYPES.length;
+	return wasPopulated;
+}
+export function clearInactiveRules() {
+	inactiveRulesByState.fill(0);
+	inactiveMinNeighborWeight = 0;
+	inactiveRuleCountOverride = null;
+	inactiveRulesPopulated = false;
+}
+export function getRingWeightPresetIdx() {
+	return ringWeightPresetIdx;
+}
+export function setRingWeightPresetIdx(v) {
+	ringWeightPresetIdx = v;
 }
 export function getNStates() {
 	return nStates;
@@ -127,6 +185,10 @@ export function getPaletteOrderIdx() {
 export function getNextWeightsIdx() {
 	return nextWeightsIdx;
 }
+export function restoreWeightsState(weightsIdx, nextValues) {
+	nextWeightsIdx = weightsIdx;
+	weights.set(nextValues);
+}
 export function getPaletteOffset() {
 	return paletteOffset;
 }
@@ -149,6 +211,38 @@ export function cellDist(dx, dy, nhType) {
 	if (nhType === 1) return Math.abs(dx) + Math.abs(dy);
 	if (nhType === 5) return Math.sqrt(dx * dx + dy * dy);
 	return Math.max(Math.abs(dx), Math.abs(dy));
+}
+
+function permutationCount(n, k) {
+	let count = 1;
+	for (let i = 0; i < k; i++) count *= n - i;
+	return count;
+}
+
+function getSumOrderTopStateCount(ns = nStates) {
+	return Math.min(3, ns);
+}
+
+export function getSumOrderRuleCount(ns = nStates) {
+	return permutationCount(ns, getSumOrderTopStateCount(ns));
+}
+
+export function getSumOrderStatesForRuleIndex(ruleIndex, ns = nStates) {
+	const topStateCount = getSumOrderTopStateCount(ns);
+	const ruleCount = getSumOrderRuleCount(ns);
+	if (ruleIndex < 0 || ruleIndex >= ruleCount) return null;
+
+	const remainingStates = Array.from({ length: ns }, (_, i) => i);
+	const states = [];
+	let idx = ruleIndex;
+	for (let pos = 0; pos < topStateCount; pos++) {
+		const remainingSlots = topStateCount - pos - 1;
+		const suffixCount = permutationCount(remainingStates.length - 1, remainingSlots);
+		const stateChoiceIdx = Math.floor(idx / suffixCount);
+		idx %= suffixCount;
+		states.push(remainingStates.splice(stateChoiceIdx, 1)[0]);
+	}
+	return states;
 }
 
 export function getRuleset(ruleCount, stateIndex) {
@@ -193,8 +287,9 @@ export function generateRings() {
 	if (nRings === 1) {
 		ringWeights[0] = 1.0;
 	} else {
+		const preset = RING_WEIGHT_PRESETS[ringWeightPresetIdx] || RING_WEIGHT_PRESETS[0];
 		for (let i = 0; i < nRings; i++) {
-			ringWeights[i] = 1 / Math.pow(2, i);
+			ringWeights[i] = preset.fn(i, nRings);
 		}
 	}
 	for (let i = nRings; i < MAX_N_RINGS; i++) {
@@ -239,8 +334,48 @@ export function countCellsInRing(innerR, outerR) {
 	return count;
 }
 
-export function recalcMinNeighborWeight() {
-	generateRings();
+function cellMatchesRing(dx, dy, ring) {
+	const useEuclidean = euclideanRings || neighborhoodType === 5;
+	const dist2 = dx * dx + dy * dy;
+	const inner = ringInnerRadii[ring];
+	const outer = ringOuterRadii[ring];
+	const iOuter = Math.floor(outer);
+	const iInner = Math.floor(inner);
+	if (Math.abs(dx) > iOuter || Math.abs(dy) > iOuter) return false;
+	if (useEuclidean) {
+		const inner2 = inner * inner;
+		const outer2 = outer * outer;
+		if (dist2 < inner2 || dist2 > outer2) return false;
+	} else {
+		const dist = cellDist(dx, dy, neighborhoodType);
+		if (dist < iInner || dist > iOuter) return false;
+	}
+	if (neighborhoodType === 1 && Math.abs(dx) + Math.abs(dy) > iOuter) return false;
+	if (neighborhoodType === 2 && dx !== 0 && dy !== 0) return false;
+	if (neighborhoodType === 3 && Math.abs(dx) !== Math.abs(dy)) return false;
+	if (neighborhoodType === 4 && ((dx + dy) & 1) !== 0) return false;
+	return true;
+}
+
+function getKernelWeightForOffset(dx, dy) {
+	let weight = 0;
+	for (let ring = 0; ring < nRings; ring++) {
+		if (cellMatchesRing(dx, dy, ring)) weight += ringWeights[ring];
+	}
+	return weight;
+}
+
+function forEachKernelWeight(cb) {
+	for (let dx = -neighborRange; dx <= neighborRange; dx++) {
+		for (let dy = -neighborRange; dy <= neighborRange; dy++) {
+			if (dx === 0 && dy === 0) continue;
+			const weight = getKernelWeightForOffset(dx, dy);
+			if (weight !== 0) cb(weight, dx, dy);
+		}
+	}
+}
+
+function getExactSumBounds() {
 	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
 		(acc, weight) => {
 			if (weight < acc.minWeight) acc.minWeight = weight;
@@ -251,19 +386,51 @@ export function recalcMinNeighborWeight() {
 	);
 	let totalMinSum = 0;
 	let totalMaxSum = 0;
-	for (let i = 0; i < nRings; i++) {
-		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
-		const rw = ringWeights[i];
-		if (rw >= 0) {
-			totalMinSum += minWeight * cells * rw;
-			totalMaxSum += maxWeight * cells * rw;
+	forEachKernelWeight((weight) => {
+		if (weight >= 0) {
+			totalMinSum += minWeight * weight;
+			totalMaxSum += maxWeight * weight;
 		} else {
-			totalMinSum += maxWeight * cells * rw;
-			totalMaxSum += minWeight * cells * rw;
+			totalMinSum += maxWeight * weight;
+			totalMaxSum += minWeight * weight;
 		}
+	});
+	return {
+		minNeighborWeight: Math.floor(totalMinSum),
+		maxNeighborWeight: Math.floor(totalMaxSum),
+	};
+}
+
+export function buildNeighborKernel() {
+	const data = new Float32Array(MAX_NEIGHBOR_CELLS * 4);
+	let count = 0;
+	forEachKernelWeight((weight, dx, dy) => {
+		const idx = count * 4;
+		data[idx] = dx;
+		data[idx + 1] = dy;
+		data[idx + 2] = weight;
+		count++;
+	});
+	return {
+		data,
+		count,
+	};
+}
+
+export function recalcMinNeighborWeight() {
+	generateRings();
+	if (transitionType === 1) {
+		minNeighborWeight = 0;
+		const nRulesNeeded = getSumOrderRuleCount();
+		if (nRulesNeeded > MAX_N_RULES || nRulesNeeded < 1) {
+			console.error('Too many rules for sum-order:', nRulesNeeded);
+			return false;
+		}
+		return true;
 	}
-	minNeighborWeight = Math.floor(totalMinSum);
-	const maxNeighborWeight = Math.floor(totalMaxSum);
+	const bounds = getExactSumBounds();
+	minNeighborWeight = bounds.minNeighborWeight;
+	const maxNeighborWeight = bounds.maxNeighborWeight;
 	const nRulesNeeded = maxNeighborWeight - minNeighborWeight + 1;
 	if (nRulesNeeded > MAX_N_RULES || nRulesNeeded < 1) {
 		console.error('Too many rules:', nRulesNeeded, weights);
@@ -272,23 +439,17 @@ export function recalcMinNeighborWeight() {
 	return true;
 }
 
-export function getCurrentRuleCount() {
-	const { minWeight, maxWeight } = Array.from(weights.slice(0, nStates)).reduce(
-		(acc, weight) => {
-			if (weight < acc.minWeight) acc.minWeight = weight;
-			if (weight > acc.maxWeight) acc.maxWeight = weight;
-			return acc;
-		},
-		{ minWeight: Infinity, maxWeight: -Infinity },
-	);
-	let totalMaxSum = 0;
-	for (let i = 0; i < nRings; i++) {
-		const cells = countCellsInRing(ringInnerRadii[i], ringOuterRadii[i]);
-		const rw = ringWeights[i];
-		totalMaxSum += (rw >= 0 ? maxWeight : minWeight) * cells * Math.abs(rw);
+function getDerivedRuleCount() {
+	if (transitionType === 1) {
+		return Math.min(getSumOrderRuleCount(), MAX_N_RULES);
 	}
-	const nRulesNeeded = Math.floor(totalMaxSum) - minNeighborWeight + 1;
+	const { maxNeighborWeight } = getExactSumBounds();
+	const nRulesNeeded = maxNeighborWeight - minNeighborWeight + 1;
 	return Math.min(Math.max(nRulesNeeded, 1), MAX_N_RULES);
+}
+
+export function getCurrentRuleCount() {
+	return ruleCountOverride ?? getDerivedRuleCount();
 }
 
 export function getColorsForUniform() {
@@ -327,21 +488,21 @@ export function updateWeights(direction = 1) {
 	nextWeightsIdx = (N_WEIGHT_DISTRIBUTIONS + nextWeightsIdx + direction) % N_WEIGHT_DISTRIBUTIONS;
 	switch (nextWeightsIdx) {
 		case 0:
-			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = (i % 2) * MAX_WEIGHT;
+			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = i % 2;
 			returnLabel = '0, 1, 0, 1…';
 			break;
 		case 1:
-			weights.set(generateFurthestSubsequentDistanceArray(MAX_N_STATES, [0, MAX_WEIGHT]));
+			weights.set(generateFurthestSubsequentDistanceArray(MAX_N_STATES, [0, 1]));
 			returnLabel = '0, 1, ½, ¾…';
 			break;
 		case 2: {
-			const pattern = [0, 0.5, 1, 0.5, 0].map((n) => n * MAX_WEIGHT);
+			const pattern = [0, 0.5, 1, 0.5, 0];
 			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = pattern[i % pattern.length];
 			returnLabel = '0, ½, 1, ½, 0…';
 			break;
 		}
 		case 3:
-			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = Math.random() * MAX_WEIGHT;
+			for (let i = 0; i < MAX_N_STATES; ++i) weights[i] = Math.random();
 			returnLabel = 'random';
 			break;
 	}
@@ -376,6 +537,9 @@ export function getStateSnapshot() {
 		currentPaletteId,
 		paletteOffset,
 		nextWeightsIdx,
+		transitionType,
+		transitionTypeName: TRANSITION_TYPES[transitionType],
+		ringWeightPresetIdx,
 	};
 }
 
@@ -385,8 +549,7 @@ function serializeSnapshot(snapshot) {
 	const { nStates: ns, ruleCount, isSemitotalistic: semi, nRings: nr } = snapshot;
 	const storedRulesetCount = semi ? ns : 1;
 	const rulesByteLength = storedRulesetCount * ruleCount;
-	// v6 appends nRings ring-weight bytes (signed int8, value = byte / 127)
-	const n = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 3 + 2 + 2 + rulesByteLength + ns + nr;
+	const n = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 3 + 2 + 2 + rulesByteLength + ns + nr + 2;
 	const buf = new Uint8Array(n);
 	const dv = new DataView(buf.buffer);
 	let off = 0;
@@ -419,6 +582,8 @@ function serializeSnapshot(snapshot) {
 		const clamped = Math.max(-1, Math.min(1, rw[i] ?? 0));
 		dv.setInt8(off++, Math.round(clamped * RING_WEIGHT_SCALE));
 	}
+	buf[off++] = Math.max(0, Math.min(TRANSITION_TYPES.length - 1, snapshot.transitionType ?? 0));
+	buf[off++] = Math.max(0, Math.min(RING_WEIGHT_PRESETS.length - 1, snapshot.ringWeightPresetIdx ?? 0));
 	return buf;
 }
 
@@ -439,7 +604,15 @@ function applySnapshot(snapshot) {
 	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
 	const nColors = rawPalettes[currentPaletteId].length;
 	paletteOffset = ((snapshot.paletteOffset % nColors) + nColors) % nColors;
+	transitionType = snapshot.transitionType < TRANSITION_TYPES.length ? snapshot.transitionType : 0;
+	ringWeightPresetIdx =
+		snapshot.ringWeightPresetIdx < RING_WEIGHT_PRESETS.length ? snapshot.ringWeightPresetIdx : 0;
 	minNeighborWeight = snapshot.minNeighborWeight;
+	ruleCountOverride = snapshot.ruleCount;
+	inactiveRulesByState.fill(0);
+	inactiveMinNeighborWeight = 0;
+	inactiveRuleCountOverride = null;
+	inactiveRulesPopulated = false;
 	const ruleCount = snapshot.ruleCount;
 	const storedRulesetCount = snapshot.isSemitotalistic ? snapshot.nStates : 1;
 	rulesByState.fill(0);
@@ -488,6 +661,19 @@ function deserializeToSnapshot(buf) {
 	}
 	if (newNStates < MIN_N_STATES || newNStates > MAX_N_STATES)
 		return fail('nStates out of range', { newNStates, min: MIN_N_STATES, max: MAX_N_STATES });
+	if (newNeighborRange < 1 || newNeighborRange > MAX_NEIGHBOR_RANGE)
+		return fail('neighborRange out of range', {
+			newNeighborRange,
+			min: 1,
+			max: MAX_NEIGHBOR_RANGE,
+		});
+	if (newNRings < MIN_N_RINGS || newNRings > MAX_N_RINGS)
+		return fail('nRings out of range', { newNRings, min: MIN_N_RINGS, max: MAX_N_RINGS });
+	if (newNeighborhoodType >= N_NEIGHBORHOOD_TYPES)
+		return fail('neighborhoodType out of range', {
+			newNeighborhoodType,
+			max: N_NEIGHBORHOOD_TYPES - 1,
+		});
 
 	let newPaletteOffset = 0;
 	let newPaletteId;
@@ -555,6 +741,28 @@ function deserializeToSnapshot(buf) {
 		ringWeightsArr = newNRings <= 1 ? [1.0] : legacyRingWeightsFor(newNRings);
 	}
 
+	let newTransitionType = 0;
+	let newRingWeightPresetIdx = 0;
+	if (version >= 7) {
+		if (buf.length < off + 2)
+			return fail('buffer too short for v7 fields', { off, bufLength: buf.length });
+		const transitionTypeByte = buf[off++];
+		const ringWeightPresetIdxByte = buf[off++];
+		newTransitionType = transitionTypeByte < TRANSITION_TYPES.length ? transitionTypeByte : 0;
+		newRingWeightPresetIdx =
+			ringWeightPresetIdxByte < RING_WEIGHT_PRESETS.length ? ringWeightPresetIdxByte : 0;
+	}
+	if (newTransitionType === 1) {
+		const expectedRuleCount = getSumOrderRuleCount(newNStates);
+		if (ruleCount !== expectedRuleCount) {
+			return fail('sum-order ruleCount mismatch', {
+				ruleCount,
+				expectedRuleCount,
+				newNStates,
+			});
+		}
+	}
+
 	const snapshot = {
 		nStates: newNStates,
 		neighborRange: newNeighborRange,
@@ -574,6 +782,8 @@ function deserializeToSnapshot(buf) {
 		colors: [],
 		currentPaletteId: newPaletteId in rawPalettes ? newPaletteId : paletteIds[0],
 		paletteOffset: 0,
+		transitionType: newTransitionType,
+		ringWeightPresetIdx: newRingWeightPresetIdx,
 	};
 	const nColors = rawPalettes[snapshot.currentPaletteId].length;
 	snapshot.paletteOffset = ((newPaletteOffset % nColors) + nColors) % nColors;

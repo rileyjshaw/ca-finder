@@ -1,4 +1,4 @@
-import { MAX_N_RINGS, cellDist } from './state.js';
+import { cellDist, getSumOrderStatesForRuleIndex } from './state.js';
 
 const WRAP_EXPLANATIONS = {
 	Wrap: 'it wraps around to the opposite edge',
@@ -85,24 +85,26 @@ export function renderExplainPanel(snapshot) {
 	}
 	panel.appendChild(statesList);
 
-	const weightsLabel = document.createElement('p');
-	weightsLabel.textContent = 'With the following weights:';
-	panel.appendChild(weightsLabel);
-	const weightsList = document.createElement('ul');
-	weightsList.className = 'explain-panel-states-list';
-	for (let i = 0; i < nStates; i++) {
-		const li = document.createElement('li');
-		li.className = 'explain-panel-state-item';
-		const box = document.createElement('div');
-		box.className = 'explain-panel-state-box';
-		box.style.backgroundColor = rgbToCss(snapshot.colors[i]);
-		const label = document.createElement('span');
-		label.textContent = String(snapshot.weights[i]);
-		li.appendChild(box);
-		li.appendChild(label);
-		weightsList.appendChild(li);
+	if (snapshot.transitionType === 0) {
+		const weightsLabel = document.createElement('p');
+		weightsLabel.textContent = 'With the following weights:';
+		panel.appendChild(weightsLabel);
+		const weightsList = document.createElement('ul');
+		weightsList.className = 'explain-panel-states-list';
+		for (let i = 0; i < nStates; i++) {
+			const li = document.createElement('li');
+			li.className = 'explain-panel-state-item';
+			const box = document.createElement('div');
+			box.className = 'explain-panel-state-box';
+			box.style.backgroundColor = rgbToCss(snapshot.colors[i]);
+			const label = document.createElement('span');
+			label.textContent = String(snapshot.weights[i]);
+			li.appendChild(box);
+			li.appendChild(label);
+			weightsList.appendChild(li);
+		}
+		panel.appendChild(weightsList);
 	}
-	panel.appendChild(weightsList);
 
 	const neighLabel = document.createElement('p');
 	neighLabel.innerHTML = `Each automaton sums the weights of its neighbors within a <strong>${snapshot.neighborhoodTypeName}</strong> neighborhood. The neighborhood has a radius of <strong>${range}</strong>${nRings > 1 ? ` and <strong>${nRings}</strong> weight rings` : ''}, which looks like this:`;
@@ -177,7 +179,16 @@ export function renderExplainPanel(snapshot) {
 	panel.appendChild(wrapP);
 
 	const tableLabel = document.createElement('p');
-	tableLabel.textContent = 'The sum of all neighbor weights determines what state the automaton transitions to:';
+	let labelText = '';
+	switch (snapshot.transitionType) {
+		case 0:
+			labelText = 'The sum of all neighbor weights determines what state the automaton transitions to:';
+			break;
+		case 1:
+			labelText = `Neighbors are summed independently by state type. The top ${Math.min(3, nStates)} states by weight determine what state the automaton transitions to:`;
+			break;
+	}
+	tableLabel.textContent = labelText;
 	panel.appendChild(tableLabel);
 
 	const minSum = snapshot.minNeighborWeight;
@@ -190,31 +201,68 @@ export function renderExplainPanel(snapshot) {
 		return sums.slice(0, -1).join(', ') + ', or ' + sums[sums.length - 1];
 	}
 
+	function formatOrderingLabel(ruleIdx, ns) {
+		const states = getSumOrderStatesForRuleIndex(ruleIdx, ns);
+		if (!states) return null;
+		return states.map((state, i) => `#${i + 1}=S${state + 1}`).join(', ');
+	}
+
 	function buildTransitionSentences(rulesRow) {
 		const byState = new Map();
+		function addLabel(stateIndex, label) {
+			if (!label) return;
+			if (!byState.has(stateIndex)) byState.set(stateIndex, []);
+			byState.get(stateIndex).push(label);
+		}
 		for (let i = 0; i < ruleCount; i++) {
 			const rule = rulesRow[i];
 			if (rule === 0) continue;
-			const sum = minSum + i;
 			const stateIndex = rule - 1;
-			if (!byState.has(stateIndex)) byState.set(stateIndex, []);
-			byState.get(stateIndex).push(sum);
+			switch (snapshot.transitionType) {
+				case 0:
+					addLabel(stateIndex, minSum + i);
+					break;
+				case 1: {
+					const label = formatOrderingLabel(i, nStates);
+					addLabel(stateIndex, label);
+					break;
+				}
+			}
 		}
 		const wrap = document.createElement('div');
 		wrap.className = 'explain-panel-transition-sentences';
 		const entries = [...byState.entries()].sort((a, b) => a[0] - b[0]);
-		for (const [stateIndex, sums] of entries) {
-			sums.sort((a, b) => a - b);
+		const maxEntries = snapshot.transitionType === 1 ? 20 : entries.length;
+		let shown = 0;
+		for (const [stateIndex, labels] of entries) {
+			if (shown >= maxEntries) {
+				const moreP = document.createElement('p');
+				moreP.className = 'explain-panel-transition-sentence';
+				moreP.textContent = `…and ${entries.length - shown} more target states.`;
+				wrap.appendChild(moreP);
+				break;
+			}
+			if (snapshot.transitionType !== 1) labels.sort((a, b) => a - b);
 			const p = document.createElement('p');
 			p.className = 'explain-panel-transition-sentence';
 			const box = document.createElement('span');
 			box.className = 'explain-panel-state-box';
 			box.style.backgroundColor = rgbToCss(snapshot.colors[stateIndex]);
-			const list = formatSumList(sums);
+			const list =
+				snapshot.transitionType === 1
+					? labels.length > 5
+						? labels.slice(0, 5).join('; ') + `; …(${labels.length} orderings)`
+						: labels.join('; ')
+					: formatSumList(labels);
 			p.appendChild(document.createTextNode('Become '));
 			p.appendChild(box);
-			p.appendChild(document.createTextNode(` State ${stateIndex + 1} if the sum is ${list}.`));
+			if (snapshot.transitionType === 1) {
+				p.appendChild(document.createTextNode(` State ${stateIndex + 1} when ordering is: ${list}.`));
+			} else {
+				p.appendChild(document.createTextNode(` State ${stateIndex + 1} if the sum is ${list}.`));
+			}
 			wrap.appendChild(p);
+			shown++;
 		}
 		return { wrap, hasNoChange: rulesRow.some(r => r === 0) };
 	}
@@ -230,7 +278,7 @@ export function renderExplainPanel(snapshot) {
 			section.appendChild(wrap);
 			if (hasNoChange) {
 				const noChangeP = document.createElement('p');
-				noChangeP.textContent = 'Any other sum leaves the state unchanged.';
+				noChangeP.textContent = 'Any other condition leaves the state unchanged.';
 				section.appendChild(noChangeP);
 			}
 			panel.appendChild(section);
@@ -240,7 +288,7 @@ export function renderExplainPanel(snapshot) {
 		panel.appendChild(wrap);
 		if (hasNoChange) {
 			const noChangeP = document.createElement('p');
-			noChangeP.textContent = 'Any other sum leaves the state unchanged.';
+			noChangeP.textContent = 'Any other condition leaves the state unchanged.';
 			panel.appendChild(noChangeP);
 		}
 	}
