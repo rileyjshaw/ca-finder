@@ -53,11 +53,9 @@ import {
 	getNStates,
 	setNStates,
 	getRulesByState,
-	getRuleset,
 	getWeights,
 	getStateSnapshot,
 	setRuleset,
-	setMinNeighborWeight,
 	createRandomRuleset,
 	generateRingRadii,
 	getIsSemitotalistic,
@@ -74,7 +72,6 @@ import {
 	restoreStateFromUrl,
 	getPaletteOffset,
 	setPaletteOffset,
-	resetPaletteOffset,
 	updateWeights,
 	updateColorsState,
 	getTransitionType,
@@ -142,7 +139,6 @@ function changeStateCount(direction) {
 			applyRulespaceChange({
 				mutate: () => setNStates(next),
 				restore: () => setNStates(nStates),
-				regenerateRuleset: getTransitionType() === 1,
 				scrambleState: true,
 			}) === false
 		)
@@ -347,7 +343,6 @@ tinykeys(window, {
 			}),
 			ArrowUp: syncUrl(e => {
 				e.preventDefault();
-				resetPaletteOffset();
 				if (generateNewRuleset()) {
 					pushRulesetToHistory();
 					showInfo('New ruleset');
@@ -651,39 +646,27 @@ function clearRuleRange(ruleCountA, ruleCountB) {
 
 function finalizeRuleSemanticsChange() {
 	clearInactiveRules();
-	resetRulesetHistory();
+	pushRulesetToHistory();
 }
 
 function createRulesetHistoryEntry() {
-	const ruleCount = getCurrentRuleCount();
-	if (ruleCount < 1) return null;
-	const rulesSnapshot = new Uint8Array(MAX_N_STATES * ruleCount);
-	for (let stateIndex = 0; stateIndex < MAX_N_STATES; stateIndex++) {
-		rulesSnapshot.set(getRuleset(ruleCount, stateIndex), stateIndex * ruleCount);
-	}
-	return {
-		rulesByState: rulesSnapshot,
-		ruleCount,
-		minNeighborWeight: getMinNeighborWeight(),
-	};
+	return encodeState();
 }
 
-function applyRulesetHistoryEntry(entry) {
-	getRulesByState().fill(0);
-	const statesToRestore = Math.min(MAX_N_STATES, Math.floor(entry.rulesByState.length / entry.ruleCount));
-	for (let stateIndex = 0; stateIndex < statesToRestore; stateIndex++) {
-		const srcStart = stateIndex * entry.ruleCount;
-		const srcEnd = srcStart + entry.ruleCount;
-		setRuleset(entry.ruleCount, stateIndex, entry.rulesByState.subarray(srcStart, srcEnd));
-	}
-	setMinNeighborWeight(entry.minNeighborWeight);
-	applyRulesToShader(entry.ruleCount);
+function applyRulesetHistoryEntry(encoded) {
+	if (!encoded) return false;
+	const didRestore = restoreStateFromUrl(encoded, ruleCount => {
+		applyAfterUnpack(ruleCount, { resetHistory: false });
+	});
+	if (!didRestore) return false;
 	syncUrlFromState();
+	return true;
 }
 
 function pushRulesetToHistory() {
 	const entry = createRulesetHistoryEntry();
-	if (!entry) return;
+	if (!entry) return false;
+	if (rulesetHistory[rulesetHistoryIndex] === entry) return false;
 	if (rulesetHistoryIndex < rulesetHistory.length - 1) {
 		rulesetHistory.splice(rulesetHistoryIndex + 1);
 	}
@@ -692,6 +675,7 @@ function pushRulesetToHistory() {
 		rulesetHistory.shift();
 	}
 	rulesetHistoryIndex = rulesetHistory.length - 1;
+	return true;
 }
 
 function resetRulesetHistory() {
@@ -704,15 +688,25 @@ function resetRulesetHistory() {
 
 function undoRulesetChange() {
 	if (rulesetHistoryIndex <= 0) return false;
-	rulesetHistoryIndex--;
-	applyRulesetHistoryEntry(rulesetHistory[rulesetHistoryIndex]);
+	const previousIndex = rulesetHistoryIndex;
+	const nextIndex = rulesetHistoryIndex - 1;
+	rulesetHistoryIndex = nextIndex;
+	if (!applyRulesetHistoryEntry(rulesetHistory[nextIndex])) {
+		rulesetHistoryIndex = previousIndex;
+		return false;
+	}
 	return true;
 }
 
 function redoRulesetChange() {
 	if (rulesetHistoryIndex >= rulesetHistory.length - 1) return false;
-	rulesetHistoryIndex++;
-	applyRulesetHistoryEntry(rulesetHistory[rulesetHistoryIndex]);
+	const previousIndex = rulesetHistoryIndex;
+	const nextIndex = rulesetHistoryIndex + 1;
+	rulesetHistoryIndex = nextIndex;
+	if (!applyRulesetHistoryEntry(rulesetHistory[nextIndex])) {
+		rulesetHistoryIndex = previousIndex;
+		return false;
+	}
 	return true;
 }
 
@@ -819,8 +813,16 @@ function saveToSlot(n) {
 function applySlot(n) {
 	const key = memoryKey(currentBank, n);
 	const encoded = memory[key];
-	if (!encoded) return;
-	restoreStateFromUrl(encoded, applyAfterUnpack);
+	if (!encoded) return false;
+	const didRestore = restoreStateFromUrl(encoded, ruleCount => {
+		applyAfterUnpack(ruleCount, { resetHistory: false });
+	});
+	if (!didRestore) {
+		showError();
+		return false;
+	}
+	pushRulesetToHistory();
+	return true;
 }
 
 function changeBank(direction) {
@@ -859,14 +861,14 @@ window.addEventListener(
 		if (slotHoldN !== slot) return;
 		clearTimeout(slotHoldTimer);
 		slotHoldN = null;
-		applySlot(slot);
-		syncUrlFromState();
+		if (applySlot(slot)) syncUrlFromState();
 	}),
 );
 
 function syncUrlFromState() {
 	const encoded = encodeState();
 	if (encoded == null) return null;
+	if (rulesetHistoryIndex >= 0) rulesetHistory[rulesetHistoryIndex] = encoded;
 	const hash = '#' + encoded;
 	if (location.hash !== hash) {
 		history.replaceState(null, '', location.pathname + location.search + hash);
@@ -874,7 +876,7 @@ function syncUrlFromState() {
 	return encoded;
 }
 
-function applyAfterUnpack(ruleCount) {
+function applyAfterUnpack(ruleCount, { resetHistory = true } = {}) {
 	generateRingRadii();
 	applyColorsFromPalette();
 	if (updateShader) {
@@ -884,7 +886,7 @@ function applyAfterUnpack(ruleCount) {
 	if (displayShader) {
 		displayShader.updateUniforms({ u_colors: getColorsForUniform() });
 	}
-	resetRulesetHistory();
+	if (resetHistory) resetRulesetHistory();
 	needsDisplayUpdate = true;
 }
 

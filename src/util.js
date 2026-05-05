@@ -3,6 +3,7 @@ import { deflateSync, inflateSync, unzlibSync } from 'fflate';
 // Base64url: URL and filename safe, 6 bits per char, no padding.
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const B64_LOOKUP = new Uint8Array(128);
+B64_LOOKUP.fill(255);
 for (let i = 0; i < B64_CHARS.length; i++) B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
 
 export function hexToNormalizedRGB(hex) {
@@ -70,28 +71,41 @@ function toBase64url(bytes) {
 	let i = 0;
 	while (i < len) {
 		const b0 = bytes[i++];
-		const b1 = i < len ? bytes[i++] : 0;
-		const b2 = i < len ? bytes[i++] : 0;
+		const hasB1 = i < len;
+		const b1 = hasB1 ? bytes[i++] : 0;
+		const hasB2 = i < len;
+		const b2 = hasB2 ? bytes[i++] : 0;
 		result += B64_CHARS[b0 >> 2];
 		result += B64_CHARS[((b0 & 3) << 4) | (b1 >> 4)];
-		if (i > len + 1) break;
+		if (!hasB1) break;
 		result += B64_CHARS[((b1 & 15) << 2) | (b2 >> 6)];
-		if (i > len) break;
+		if (!hasB2) break;
 		result += B64_CHARS[b2 & 63];
 	}
 	return result;
 }
 
+function fromBase64urlChar(str, index) {
+	const code = str.charCodeAt(index);
+	if (code > 127 || B64_LOOKUP[code] === 255) {
+		throw new Error('invalid base64url character');
+	}
+	return B64_LOOKUP[code];
+}
+
 function fromBase64url(str) {
+	if (str.length % 4 === 1) {
+		throw new Error('invalid base64url length');
+	}
 	const len = str.length;
 	const outLen = (len * 3) >> 2;
 	const out = new Uint8Array(outLen);
 	let j = 0;
 	for (let i = 0; i < len; i += 4) {
-		const c0 = B64_LOOKUP[str.charCodeAt(i)];
-		const c1 = B64_LOOKUP[str.charCodeAt(i + 1)];
-		const c2 = i + 2 < len ? B64_LOOKUP[str.charCodeAt(i + 2)] : 0;
-		const c3 = i + 3 < len ? B64_LOOKUP[str.charCodeAt(i + 3)] : 0;
+		const c0 = fromBase64urlChar(str, i);
+		const c1 = fromBase64urlChar(str, i + 1);
+		const c2 = i + 2 < len ? fromBase64urlChar(str, i + 2) : 0;
+		const c3 = i + 3 < len ? fromBase64urlChar(str, i + 3) : 0;
 		out[j++] = (c0 << 2) | (c1 >> 4);
 		if (j < outLen) out[j++] = ((c1 & 15) << 4) | (c2 >> 2);
 		if (j < outLen) out[j++] = ((c2 & 3) << 6) | c3;
@@ -112,7 +126,7 @@ export function decompressFromUrl(str) {
 		try {
 			return unzlibSync(compressed);
 		} catch {
-			throw e;
+			throw new Error(`invalid compressed state: ${e.message}`);
 		}
 	}
 }
