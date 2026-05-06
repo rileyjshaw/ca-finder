@@ -336,33 +336,23 @@ tinykeys(window, {
 			KeyT: syncUrl(toggleTransitionType),
 			ArrowRight: syncUrl(e => {
 				e.preventDefault();
-				if (redoRulesetChange()) {
-					showInfo('Redo');
-				} else {
-					showInfo('No redo history');
-				}
+				redoRulesetChange();
 			}),
 			ArrowUp: syncUrl(e => {
 				e.preventDefault();
 				if (generateNewRuleset()) {
 					pushRulesetToHistory();
-					showInfo('New ruleset');
 				}
 			}),
 			ArrowDown: syncUrl(e => {
 				e.preventDefault();
 				if (mutateRuleset()) {
 					pushRulesetToHistory();
-					showInfo('Mutate');
 				}
 			}),
 			ArrowLeft: syncUrl(e => {
 				e.preventDefault();
-				if (undoRulesetChange()) {
-					showInfo('Undo');
-				} else {
-					showInfo('No undo history');
-				}
+				undoRulesetChange();
 			}),
 			Space: () => {
 				isPaused = !isPaused;
