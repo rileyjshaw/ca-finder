@@ -139,6 +139,7 @@ function changeStateCount(direction) {
 			applyRulespaceChange({
 				mutate: () => setNStates(next),
 				restore: () => setNStates(nStates),
+				regenerateRuleset: getTransitionType() === 1,
 				scrambleState: true,
 			}) === false
 		)

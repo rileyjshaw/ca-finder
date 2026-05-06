@@ -20,9 +20,10 @@ export const MIN_N_RINGS = 1;
 export const MAX_N_RINGS = 8;
 
 // Derived.
+const LEGACY_MAX_WEIGHT = 1.5;
 const MAX_CELLS_PER_RING = Math.pow(MAX_NEIGHBOR_RANGE * 2 + 1, 2);
 export const MAX_NEIGHBOR_CELLS = MAX_CELLS_PER_RING - 1;
-export const MAX_N_RULES = Math.floor(MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
+export const MAX_N_RULES = Math.floor(LEGACY_MAX_WEIGHT * MAX_CELLS_PER_RING * MAX_N_RINGS + 1);
 export const MAX_ENCODED_STATE_LENGTH = 240;
 
 export const WRAP_BEHAVIOURS = ['Wrap', 'Reflect', 'Clamp', 'Brick', 'Stair'];
@@ -30,9 +31,10 @@ export const N_WRAP_BEHAVIOURS = WRAP_BEHAVIOURS.length;
 export const NEIGHBORHOOD_TYPES = ['Moore', 'Von Neumann', 'Cross', 'Star', 'Checkerboard', 'Euclid'];
 export const N_NEIGHBORHOOD_TYPES = NEIGHBORHOOD_TYPES.length;
 
-const STATE_VERSION = 7;
-const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4, 5, 6, 7];
-const LEGACY_V6_WEIGHT_SCALE = 255 / 1.5;
+const STATE_VERSION = 8;
+const SUPPORTED_STATE_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8];
+const WEIGHT_SCALE = 255 / LEGACY_MAX_WEIGHT;
+const V7_WEIGHT_SCALE = 255;
 
 // State variables (module-level; mutated by unpack/setters).
 let nStates = 8;
@@ -575,14 +577,14 @@ function serializeSnapshot(snapshot) {
 		for (let i = 0; i < ruleCount; i++) buf[off++] = ruleset[i];
 	}
 	const w = snapshot.weights;
-	for (let i = 0; i < ns; i++) buf[off++] = Math.min(255, Math.round((w[i] ?? 0) * 255));
+	for (let i = 0; i < ns; i++) buf[off++] = Math.min(255, Math.round((w[i] ?? 0) * WEIGHT_SCALE));
 	const rw = snapshot.ringWeights;
 	for (let i = 0; i < nr; i++) {
 		const clamped = Math.max(-1, Math.min(1, rw[i] ?? 0));
 		dv.setInt8(off++, Math.round(clamped * RING_WEIGHT_SCALE));
 	}
-	buf[off++] = snapshot.transitionType ?? 0;
-	buf[off++] = snapshot.ringWeightPresetIdx ?? 0;
+	buf[off++] = Math.max(0, Math.min(TRANSITION_TYPES.length - 1, snapshot.transitionType ?? 0));
+	buf[off++] = Math.max(0, Math.min(RING_WEIGHT_PRESETS.length - 1, snapshot.ringWeightPresetIdx ?? 0));
 	return buf;
 }
 
@@ -603,8 +605,9 @@ function applySnapshot(snapshot) {
 	if (paletteOrderIdx === -1) paletteOrderIdx = 0;
 	const nColors = rawPalettes[currentPaletteId].length;
 	paletteOffset = ((snapshot.paletteOffset % nColors) + nColors) % nColors;
-	transitionType = snapshot.transitionType ?? 0;
-	ringWeightPresetIdx = snapshot.ringWeightPresetIdx ?? 0;
+	transitionType = snapshot.transitionType < TRANSITION_TYPES.length ? snapshot.transitionType : 0;
+	ringWeightPresetIdx =
+		snapshot.ringWeightPresetIdx < RING_WEIGHT_PRESETS.length ? snapshot.ringWeightPresetIdx : 0;
 	minNeighborWeight = snapshot.minNeighborWeight;
 	ruleCountOverride = snapshot.ruleCount;
 	inactiveRulesByState.fill(0);
@@ -659,6 +662,19 @@ function deserializeToSnapshot(buf) {
 	}
 	if (newNStates < MIN_N_STATES || newNStates > MAX_N_STATES)
 		return fail('nStates out of range', { newNStates, min: MIN_N_STATES, max: MAX_N_STATES });
+	if (newNeighborRange < 1 || newNeighborRange > MAX_NEIGHBOR_RANGE)
+		return fail('neighborRange out of range', {
+			newNeighborRange,
+			min: 1,
+			max: MAX_NEIGHBOR_RANGE,
+		});
+	if (newNRings < MIN_N_RINGS || newNRings > MAX_N_RINGS)
+		return fail('nRings out of range', { newNRings, min: MIN_N_RINGS, max: MAX_N_RINGS });
+	if (newNeighborhoodType >= N_NEIGHBORHOOD_TYPES)
+		return fail('neighborhoodType out of range', {
+			newNeighborhoodType,
+			max: N_NEIGHBORHOOD_TYPES - 1,
+		});
 
 	let newPaletteOffset = 0;
 	let newPaletteId;
@@ -713,7 +729,7 @@ function deserializeToSnapshot(buf) {
 			rulesList.push(shared);
 		}
 	}
-	const weightScaleForVersion = version <= 6 ? LEGACY_V6_WEIGHT_SCALE : 255;
+	const weightScaleForVersion = version === 7 ? V7_WEIGHT_SCALE : WEIGHT_SCALE;
 	const weightsArr = [];
 	for (let i = 0; i < newNStates; i++) weightsArr.push(buf[off++] / weightScaleForVersion);
 
@@ -732,8 +748,11 @@ function deserializeToSnapshot(buf) {
 	if (version >= 7) {
 		if (buf.length < off + 2)
 			return fail('buffer too short for v7 fields', { off, bufLength: buf.length });
-		newTransitionType = buf[off++];
-		newRingWeightPresetIdx = buf[off++];
+		const transitionTypeByte = buf[off++];
+		const ringWeightPresetIdxByte = buf[off++];
+		newTransitionType = transitionTypeByte < TRANSITION_TYPES.length ? transitionTypeByte : 0;
+		newRingWeightPresetIdx =
+			ringWeightPresetIdxByte < RING_WEIGHT_PRESETS.length ? ringWeightPresetIdxByte : 0;
 	}
 	if (newTransitionType === 1) {
 		const expectedRuleCount = getSumOrderRuleCount(newNStates);

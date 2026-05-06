@@ -185,8 +185,7 @@ export function renderExplainPanel(snapshot) {
 			labelText = 'The sum of all neighbor weights determines what state the automaton transitions to:';
 			break;
 		case 1:
-			labelText =
-				'Neighbors are summed independently by state type. The top three states by weight determine what state the automaton transitions to:';
+			labelText = `Neighbors are summed independently by state type. The top ${Math.min(3, nStates)} states by weight determine what state the automaton transitions to:`;
 			break;
 	}
 	tableLabel.textContent = labelText;
