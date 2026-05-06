@@ -70,8 +70,10 @@ import {
 	setNRings,
 	recalcMinNeighborWeight,
 	restoreStateFromUrl,
+	getCurrentPaletteId,
 	getPaletteOffset,
 	setPaletteOffset,
+	setPaletteFromSnapshot,
 	updateWeights,
 	updateColorsState,
 	getTransitionType,
@@ -125,8 +127,7 @@ function applyRulespaceChange({ mutate, restore, regenerateRuleset = false, scra
 
 function changeNeighborRange(direction) {
 	const neighborRange = getNeighborRange();
-	const next =
-		direction > 0 ? Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1) : Math.max(neighborRange - 1, 1);
+	const next = direction > 0 ? Math.min(MAX_NEIGHBOR_RANGE, neighborRange + 1) : Math.max(neighborRange - 1, 1);
 	if (next !== neighborRange && !setNeighborRange(next, true)) return false;
 	showInfo(`Neighbor range: ${getNeighborRange()}`);
 }
@@ -801,11 +802,14 @@ function saveToSlot(n) {
 	showBankSlots();
 }
 
-function applySlot(n) {
+function applySlot(n, { preservePalette = false } = {}) {
 	const key = memoryKey(currentBank, n);
 	const encoded = memory[key];
 	if (!encoded) return false;
+	const currentPaletteId = getCurrentPaletteId();
+	const paletteOffset = getPaletteOffset();
 	const didRestore = restoreStateFromUrl(encoded, ruleCount => {
+		if (preservePalette) setPaletteFromSnapshot(currentPaletteId, paletteOffset);
 		applyAfterUnpack(ruleCount, { resetHistory: false });
 	});
 	if (!didRestore) {
@@ -830,11 +834,18 @@ function showBankSlots() {
 	showSecondaryInfo(dots);
 }
 
+function getNumberKeySlot(event) {
+	const digitMatch = event.code.match(/^Digit([0-9])$/) || event.code.match(/^Numpad([0-9])$/);
+	if (digitMatch) return parseInt(digitMatch[1], 10);
+	if (event.key >= '0' && event.key <= '9') return parseInt(event.key, 10);
+	return null;
+}
+
 window.addEventListener(
 	'keydown',
-	ifInstructionsHidden(({ key, repeat }) => {
-		if (repeat || key < '0' || key > '9') return;
-		const slot = parseInt(key, 10);
+	ifInstructionsHidden(event => {
+		const slot = getNumberKeySlot(event);
+		if (event.repeat || slot == null) return;
 		clearTimeout(slotHoldTimer);
 		slotHoldN = slot;
 		slotHoldTimer = setTimeout(() => {
@@ -846,13 +857,13 @@ window.addEventListener(
 
 window.addEventListener(
 	'keyup',
-	ifInstructionsHidden(({ key }) => {
-		if (key < '0' || key > '9') return;
-		const slot = parseInt(key, 10);
+	ifInstructionsHidden(event => {
+		const slot = getNumberKeySlot(event);
+		if (slot == null) return;
 		if (slotHoldN !== slot) return;
 		clearTimeout(slotHoldTimer);
 		slotHoldN = null;
-		if (applySlot(slot)) syncUrlFromState();
+		if (applySlot(slot, { preservePalette: event.shiftKey })) syncUrlFromState();
 	}),
 );
 
@@ -907,9 +918,7 @@ function setNeighborRange(newNeighborRange, keepRuleset = false) {
 	const previousRuleCountOverride = getRuleCountOverride();
 	setNeighborRangeValue(newNeighborRange);
 	clearRuleCountOverride();
-	const didUpdate = keepRuleset
-		? updateUniformsKeepRuleset(previousRuleCount)
-		: updateUniforms();
+	const didUpdate = keepRuleset ? updateUniformsKeepRuleset(previousRuleCount) : updateUniforms();
 	if (!didUpdate) {
 		setNeighborRangeValue(previousNeighborRange);
 		return rollbackRulespaceChange(undefined, previousRuleCountOverride);
