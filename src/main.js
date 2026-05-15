@@ -26,7 +26,7 @@ and determine that it should remain unchanged. */
 import { tinykeys } from 'tinykeys';
 import ShaderPad from 'shaderpad';
 import helpers from 'shaderpad/plugins/helpers';
-import save from 'shaderpad/plugins/save';
+import { save } from 'shaderpad/util';
 
 import './palettes.js';
 import {
@@ -245,14 +245,14 @@ tinykeys(window, {
 			Enter: () => {
 				const encoded = syncUrlFromState();
 				if (encoded != null && encoded.length <= MAX_ENCODED_STATE_LENGTH) {
-					displayShader.save(`ca-${encoded}.png`);
+					void save(displayShader, `ca-${encoded}.png`);
 				} else {
 					if (encoded?.length > MAX_ENCODED_STATE_LENGTH) {
 						window.alert(
 							`Encoded state exceeded ${MAX_ENCODED_STATE_LENGTH} characters; filename was truncated.`,
 						);
 					}
-					displayShader.save('ca-export.png');
+					void save(displayShader, 'ca-export.png');
 				}
 			},
 			KeyS: scramble,
@@ -616,7 +616,7 @@ void main() {
 
 	displayShader = new ShaderPad(displayFsSource, {
 		canvas,
-		plugins: [helpers(), save()],
+		plugins: [helpers()],
 	});
 	displayShader.initializeTexture('u_stateTexture', updateShader, R8UI_OPTIONS);
 	displayShader.initializeUniform('u_colors', 'float', getColorsForUniform(), { arrayLength: MAX_N_STATES });
